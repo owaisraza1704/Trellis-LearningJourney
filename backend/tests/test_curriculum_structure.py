@@ -92,6 +92,76 @@ def test_plain_prose_and_code_blocks_do_not_create_topic_anchors():
     assert outline_paths("```markdown\n## Example heading\n* Example topic\n```") == []
 
 
+def test_step_and_arrow_outline_keeps_topics_nested_without_turning_prose_into_nodes():
+    text = r"""Step 1: Master the Fundamentals
+→ LLMs
+→ Embeddings
+→ Retrieval
+→ Prompting
+→ Fine-Tuning
+Not just how they work.
+Why they work.
+And where they fail.
+
+Step 2: Learn System Design
+→ RAG Architectures
+→ Agent Workflows
+→ Memory Systems
+→ Evaluation Pipelines
+→ Production Deployments
+Because AI interviews increasingly test systems, not components.
+
+Step 3: Study Failure Modes
+→ Hallucinations
+→ Retrieval Misses
+→ Context Overflows
+→ Cost Explosions
+→ Latency Issues
+Great engineers understand failures better than features.
+
+Step 4: Learn Evaluation
+This is where most candidates struggle.
+→ Precision\@K
+→ Recall\@K
+→ Ground Truth Datasets
+→ Human Evaluation
+→ LLM-as-a-Judge
+If you can't measure quality, you can't improve quality.
+
+Step 5: Practice Real Interview Questions
+Not theoretical questions.
+The kind of questions that force you to think:
+"What would you do?"
+"Why did you choose that?"
+"What trade-offs are you making?"
+"""
+    steps = [
+        ("Step 1: Master the Fundamentals", [
+            "LLMs", "Embeddings", "Retrieval", "Prompting", "Fine-Tuning",
+        ]),
+        ("Step 2: Learn System Design", [
+            "RAG Architectures", "Agent Workflows", "Memory Systems",
+            "Evaluation Pipelines", "Production Deployments",
+        ]),
+        ("Step 3: Study Failure Modes", [
+            "Hallucinations", "Retrieval Misses", "Context Overflows",
+            "Cost Explosions", "Latency Issues",
+        ]),
+        ("Step 4: Learn Evaluation", [
+            "Precision@K", "Recall@K", "Ground Truth Datasets",
+            "Human Evaluation", "LLM-as-a-Judge",
+        ]),
+        ("Step 5: Practice Real Interview Questions", []),
+    ]
+    expected = []
+    for step, topics in steps:
+        expected.append((step,))
+        expected.extend((step, topic) for topic in topics)
+
+    assert outline_paths(text) == expected
+    assert len(expected) == 25
+
+
 def test_long_freeform_items_are_left_for_semantic_review():
     long_text = "Long explanatory text " * 20
     text = f"""## Hardware

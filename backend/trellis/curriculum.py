@@ -24,6 +24,36 @@ def outline_paths(text: str, *, headings_only: bool = False) -> list[tuple[str, 
                 and previous.type == "paragraph_open"
             )
             if not is_heading and not is_list_title:
+                if headings_only or previous.type != "paragraph_open" or list_items:
+                    continue
+
+                # Some pasted curricula use "Step 1:" and arrows instead of Markdown syntax.
+                lines = []
+                line_parts = []
+                for child in token.children or []:
+                    if child.type in {"softbreak", "hardbreak"}:
+                        lines.append("".join(line_parts).strip())
+                        line_parts = []
+                    elif child.type in {"text", "code_inline"}:
+                        line_parts.append(child.content)
+                lines.append("".join(line_parts).strip())
+
+                for line in lines:
+                    step = re.fullmatch(r"Step\s+\d+\s*:\s+.+", line, re.IGNORECASE)
+                    if step:
+                        while headings and headings[-1][0] >= 2:
+                            headings.pop()
+                        headings.append((2, line if len(line) <= 200 else ""))
+                        path = tuple(title for _, title in headings)
+                    elif line.startswith("→ "):
+                        title = line[2:].strip()
+                        path = tuple(title for _, title in headings) + (
+                            title if len(title) <= 200 else "",
+                        )
+                    else:
+                        continue
+                    if all(path):
+                        paths.append(path)
                 continue
 
             title_parts = []

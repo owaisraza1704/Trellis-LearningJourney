@@ -247,6 +247,60 @@ def test_nested_curriculum_derives_valid_parent_references(monkeypatch):
     assert result["generation"]["evaluation"]["method"] == "model_outline_fidelity"
 
 
+def test_step_and_arrow_outline_reaches_model_as_required_hierarchy(monkeypatch):
+    monkeypatch.setattr(ai, "selected_provider", lambda session: ("azure", "test-model"))
+    text = """Step 1: Master the Fundamentals
+→ LLMs
+→ Embeddings
+Why they work and where they fail.
+
+Step 2: Learn System Design
+→ RAG Architectures
+"""
+    curriculum = ai.Curriculum(
+        title="AI interview preparation", description="Study the supplied outline", nodes=[
+            ai.CurriculumNode(
+                title="Step 1: Master the Fundamentals", description="Learn fundamentals",
+                evidence_ids=[], children=[
+                    ai.CurriculumNode(title=title, description=f"Study {title}",
+                                      evidence_ids=[], children=[])
+                    for title in ("LLMs", "Embeddings")
+                ],
+            ),
+            ai.CurriculumNode(
+                title="Step 2: Learn System Design", description="Learn system design",
+                evidence_ids=[], children=[ai.CurriculumNode(
+                    title="RAG Architectures", description="Study RAG architectures",
+                    evidence_ids=[], children=[],
+                )],
+            ),
+        ],
+    )
+    review = ai.CurriculumEvaluation(
+        relevance=1, completeness=1, consistency=1, grounding=1, supported=True,
+        explanation="The outline is preserved.", missing_topics=[], hierarchy_preserved=True,
+    )
+    calls = []
+
+    def complete(provider, model, schema, messages):
+        calls.append((schema, json.loads(messages[1]["content"])))
+        return curriculum if schema == ai.Curriculum else review
+
+    monkeypatch.setattr(ai, "structured_completion", complete)
+    monkeypatch.setattr(evidence, "retrieve_evidence", lambda *args, **kwargs: pytest.fail("No web for outline imports"))
+    result = ai.generate_curriculum(None, text, "outline", [])
+
+    assert calls[0][1]["required_outline_paths"] == [
+        ["Step 1: Master the Fundamentals"],
+        ["Step 1: Master the Fundamentals", "LLMs"],
+        ["Step 1: Master the Fundamentals", "Embeddings"],
+        ["Step 2: Learn System Design"],
+        ["Step 2: Learn System Design", "RAG Architectures"],
+    ]
+    assert [node["parent_index"] for node in result["nodes"]] == [None, 0, 0, None, 3]
+    assert [schema for schema, _ in calls] == [ai.Curriculum, ai.CurriculumEvaluation]
+
+
 @pytest.mark.parametrize("evidence_ids", [[], ["invented-curriculum-reference"]])
 def test_goal_curriculum_requires_valid_citations_for_every_node(monkeypatch, supported_answer, evidence_ids):
     calls = []

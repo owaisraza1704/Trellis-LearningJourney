@@ -456,8 +456,10 @@ def generate_curriculum(session: Session, input: str, mode: str, source_ids: lis
         instruction += (
             "Represent the supplied curriculum faithfully. Preserve its topics, ordering, and "
             "hierarchy. Do not omit topics or add subjects or factual teaching content not supplied "
-            "by the user. Every node's evidence_ids must be empty because the outline itself is "
-            "the authority for this import."
+            "by the user. A 'Step N:' line is a parent topic and each following '→' line is its "
+            "child topic. Treat surrounding prose as context for descriptions, not extra topics. "
+            "Every node's evidence_ids must be empty because the outline itself is the authority "
+            "for this import."
         )
     else:
         instruction += (
@@ -503,6 +505,8 @@ def generate_curriculum(session: Session, input: str, mode: str, source_ids: lis
         review_instruction += (
             "The learner's original outline is the sole authority. Check that its topics, order, "
             "and hierarchy are faithfully represented without omitted topics or invented additions. "
+            "For 'Step N:' and '→' outlines, the steps are parents and arrows are their children; "
+            "surrounding prose describes intent rather than extra topics. "
             "Minor wording and formatting changes are allowed when meaning is preserved. Score "
             "grounding and consistency against the outline itself, not external knowledge. Set "
             "supported false if topics or factual content were invented or the hierarchy changed. "
@@ -644,11 +648,21 @@ def generate_curriculum(session: Session, input: str, mode: str, source_ids: lis
                     },
                 },
             }
-        detail = (
-            "The generated curriculum was not sufficiently supported by the sources. Add relevant material or narrow the goal."
-            if mode == "goal" else
-            "The imported curriculum did not faithfully preserve your outline. Please try again with a clearer outline."
-        )
+        if mode == "goal":
+            detail = (
+                "The generated curriculum was not sufficiently supported by the sources. "
+                "Add relevant material or narrow the goal."
+            )
+        elif required:
+            detail = (
+                "Trellis recognized your outline but could not verify the generated curriculum "
+                "against it. Please retry."
+            )
+        else:
+            detail = (
+                "The imported curriculum did not faithfully preserve your outline. "
+                "Please try again with a clearer outline."
+            )
         raise HTTPException(502, detail)
     created_at = datetime.now(timezone.utc).isoformat()
     generation = {
