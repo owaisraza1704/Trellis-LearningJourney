@@ -720,7 +720,8 @@ function NodeWorkspace({
                   className="mt-4 border-t border-[#E3E0D8] pt-3"
                   onSubmit={(event) => {
                     event.preventDefault()
-                    if (prompt.trim()) send.mutate({ text: prompt, fromComposer: true })
+                    if (prompt.trim() && !send.isPending && !closed)
+                      send.mutate({ text: prompt, fromComposer: true })
                   }}
                 >
                   <label className="sr-only" htmlFor="node-question">
@@ -736,7 +737,16 @@ function NodeWorkspace({
                     value={prompt}
                     disabled={closed}
                     onChange={(event) => setPrompt(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing)
+                        return
+                      event.preventDefault()
+                      if (!event.repeat) event.currentTarget.form?.requestSubmit()
+                    }}
                   />
+                  <p className="mt-1 text-[10px] text-[#7A7870]">
+                    Enter to send · Shift+Enter for a new line
+                  </p>
                   <label className="mt-3 flex items-center gap-2 text-xs text-[#5A5850]">
                     <input
                       type="checkbox"

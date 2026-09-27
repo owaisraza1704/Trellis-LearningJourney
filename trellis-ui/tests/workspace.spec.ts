@@ -236,6 +236,51 @@ test('question progress appears before the checked answer stream is shown', asyn
   ).toBeVisible()
 })
 
+test('Enter sends a question and Shift+Enter adds a new line', async ({ page }) => {
+  const prompts: string[] = []
+  await page.route('**/api/**', async (route) => {
+    const url = new URL(route.request().url()).pathname
+    if (url === '/api/workspace') return route.fulfill({ json: workspace })
+    if (url === '/api/location') return route.fulfill({ json: {} })
+    if (url === `/api/nodes/${node.id}`)
+      return route.fulfill({
+        json: { node, path, nodes: [node], interactions: [], threads: [] },
+      })
+    if (url === `/api/nodes/${node.id}/interactions`) {
+      const prompt = route.request().postDataJSON().prompt
+      prompts.push(prompt)
+      return route.fulfill({
+        json: {
+          id: 'keyboard-answer',
+          path_id: path.id,
+          node_id: node.id,
+          thread_id: null,
+          prompt,
+          content: 'A transaction groups operations into one unit.',
+          action: 'question',
+          status: 'answered',
+          evidence: [],
+          evaluation: {},
+          created_at: '2026-09-25T10:00:00Z',
+        },
+      })
+    }
+    return route.fulfill({ status: 404, json: { detail: `Unexpected ${url}` } })
+  })
+
+  await page.goto(`/?screen=node&path=${path.id}&node=${node.id}`)
+  const composer = page.getByLabel('Ask about this topic')
+  await composer.fill('How do transactions work?')
+  await composer.press('Shift+Enter')
+  await composer.type('Give an example.')
+  await expect(composer).toHaveValue('How do transactions work?\nGive an example.')
+  expect(prompts).toEqual([])
+
+  await composer.press('Enter')
+  await expect.poll(() => prompts).toEqual(['How do transactions work?\nGive an example.'])
+  await expect(composer).toHaveValue('')
+})
+
 test('a failed answer stream shows the error without adding a response', async ({ page }) => {
   await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url()).pathname
