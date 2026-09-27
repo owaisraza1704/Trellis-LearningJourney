@@ -126,6 +126,62 @@ def test_node_followup_keeps_its_topic_when_no_thread_is_active(monkeypatch):
     assert requests[1][1]["context"] == requests[2][1]["context"]
 
 
+def test_selected_answer_sets_the_topic_for_retrieval_draft_and_review(monkeypatch):
+    selected_prompt = "Are there other model training methods?"
+    context = {
+        "path_id": "journey", "node_title": "Fine-Tuning",
+        "history": [{"prompt": selected_prompt, "content": "Methods include SFT and RLHF."}],
+        "focus_interaction": {
+            "prompt": selected_prompt, "content": "Methods include SFT and RLHF.",
+            "status": "answered",
+        },
+        "answer_action": "simplify",
+    }
+    passage = {
+        **QPS_PASSAGE, "id": "method-passage", "title": "Training methods",
+        "excerpt": "Supervised fine-tuning uses labelled examples. RLHF uses human feedback.",
+    }
+    resolved = "Explain SFT and RLHF training methods in more depth."
+    search_query = "SFT RLHF training methods"
+    requests = []
+    retrievals = []
+
+    def complete(provider, model, schema, messages):
+        request = json.loads(messages[1]["content"])
+        requests.append((schema, request))
+        if schema is ai.ResolvedQuestion:
+            assert request["context"]["focus_interaction"]["prompt"] == selected_prompt
+            return ai.ResolvedQuestion(
+                question=resolved, search_query=search_query, sources_only=False,
+            )
+        assert request["question"] == resolved
+        assert request["context"]["active_topic"] == selected_prompt
+        if schema is ai.DraftAnswer:
+            return ai.DraftAnswer(status="answered", reason="", blocks=[
+                ai.AnswerBlock(text=passage["excerpt"], evidence_ids=[passage["id"]]),
+            ])
+        return ai.AnswerEvaluation(relevance=1, completeness=1, consistency=1, grounding=1,
+                                   supported=True, explanation="Both claims are in the passage.")
+
+    def retrieve(session, query, **kwargs):
+        retrievals.append((query, kwargs))
+        return {"evidence": [passage], "warnings": [], "web_search_performed": False}
+
+    monkeypatch.setattr(ai, "selected_provider", lambda session: ("azure", "test-model"))
+    monkeypatch.setattr(ai, "structured_completion", complete)
+    monkeypatch.setattr(evidence, "retrieve_evidence", retrieve)
+
+    result = ai.answer(None, context, "Explain the selected answer simply")
+
+    assert result["status"] == "answered"
+    assert result["evaluation"]["active_topic"] == selected_prompt
+    assert retrievals == [(search_query, {"path_id": "journey"})]
+    assert [schema for schema, _ in requests] == [
+        ai.ResolvedQuestion, ai.DraftAnswer, ai.AnswerEvaluation,
+    ]
+    assert requests[1][1]["context"] == requests[2][1]["context"]
+
+
 def test_source_constraint_resolved_from_followup_history_prevents_general_fallback(monkeypatch):
     context = {
         "path_id": "journey", "node_title": "Horizontal scaling", "thread_title": "QPS",

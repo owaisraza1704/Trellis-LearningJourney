@@ -46,7 +46,12 @@ const generalAnswer: Interaction = {
 async function mockJourney(page: Page, interactions = [generalAnswer]) {
   const state = {
     interactions: structuredClone(interactions),
-    questions: [] as Array<{ prompt: string; action: string; sources_only?: boolean }>,
+    questions: [] as Array<{
+      prompt: string
+      action: string
+      sources_only?: boolean
+      reply_to_interaction_id?: string
+    }>,
     pages: [
       { id: 'working-notes', path_id: journey.id, title: 'Working notes', position: 0, items: [] },
     ] as NotebookPage[],
@@ -176,6 +181,31 @@ test('the unverified label follows saved responses into notebook and study views
   await expect(reading.getByText('Saved sources', { exact: true })).toHaveCount(0)
 })
 
+test('follow-up buttons use the selected answer rather than the node topic', async ({ page }) => {
+  const state = await mockJourney(page)
+  await page.goto(`/?screen=node&path=${journey.id}&node=${node.id}`)
+  await expect(page.getByRole('button', { name: 'Compare ideas' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Apply it' })).toHaveCount(0)
+
+  for (const [index, label, action] of [
+    [0, 'Show example', 'example'],
+    [1, 'Go deeper', 'deeper'],
+    [2, 'Explain simply', 'simplify'],
+    [3, 'Key takeaways', 'recap'],
+  ] as const) {
+    await page.getByRole('button', { name: label, exact: true }).click()
+    await expect.poll(() => state.questions.length).toBe(index + 1)
+    expect(state.questions[index].action).toBe(action)
+    expect(state.questions[index].reply_to_interaction_id).toBe(generalAnswer.id)
+    expect(state.questions[index].prompt).toContain(generalAnswer.prompt)
+    expect(state.questions[index].prompt).not.toContain(node.title)
+    await expect(
+      page.getByRole('heading', { name: state.questions[index].prompt, exact: true }),
+    ).toBeVisible()
+    await page.getByRole('button', { name: `Read response to ${generalAnswer.prompt}` }).click()
+  }
+})
+
 test('Sources only is optional and applies to questions and quick actions', async ({ page }) => {
   const state = await mockJourney(page)
   await page.goto(`/?screen=node&path=${journey.id}&node=${node.id}`)
@@ -199,12 +229,14 @@ test('Sources only is optional and applies to questions and quick actions', asyn
     action: 'question',
     sources_only: true,
   })
+  await page.getByRole('button', { name: 'Read response to What is throughput?' }).click()
   await page.getByRole('button', { name: 'Go deeper', exact: true }).click()
   await expect(
-    page.getByRole('heading', { name: 'Explain Horizontal scaling in more depth.' }),
+    page.getByRole('heading', { name: 'Go deeper into the answer to: What is throughput?' }),
   ).toBeVisible()
   expect(state.questions[2].sources_only).toBe(true)
   expect(state.questions[2].action).toBe('deeper')
+  expect(state.questions[2].reply_to_interaction_id).toBe('response-1')
 })
 
 test('retrying a saved question respects the current Sources only choice', async ({ page }) => {

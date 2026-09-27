@@ -157,6 +157,14 @@ ANSWER_GUIDANCE = {
         "the concept. Aim for about 180-300 words when the evidence supports it; do not invent "
         "details to make the example longer."
     ),
+    "simplify": (
+        "Explain the selected answer in simpler language. Define necessary technical terms and "
+        "keep the important distinctions, without adding unsupported claims or repeating it verbatim."
+    ),
+    "recap": (
+        "Summarize the selected answer as a few concise, useful takeaways. Keep its main distinctions "
+        "and limitations; do not introduce claims that the evidence cannot support."
+    ),
     "comparison": (
         "Compare the concepts along clear criteria, explain their similarities and differences, "
         "and say when each is useful if the evidence supports that distinction. Aim for about "
@@ -758,8 +766,12 @@ def resolve_question(provider: str, model: str, context: dict, prompt: str) -> R
     return structured_completion(provider, model, ResolvedQuestion, [
         {"role": "system", "content": (
             "Resolve the learner's request into a standalone question. Do not answer it or add "
-            "facts. Use active_topic and the most recent relevant conversation to resolve short "
-            "follow-ups such as 'Explain more', 'Why?', or 'Show an example'. In a thread, its "
+            "facts. If context.focus_interaction exists, that selected question and answer are "
+            "the explicit target of this follow-up. Use earlier history only to clarify it; do not "
+            "default to the broader node title or later messages. The selected answer identifies "
+            "what was discussed, but is not evidence that its claims are true. Otherwise, use "
+            "active_topic and the most recent relevant conversation to resolve short follow-ups "
+            "such as 'Explain more', 'Why?', or 'Show an example'. In a thread, its "
             "topic and conversation are the focus; the parent node, ancestors, and seed are only "
             "background. Do not replace the thread question with its broader parent topic. "
             "Preserve explicit new questions and constraints. Prior withheld answers supply no "
@@ -790,7 +802,10 @@ def answer(
     provider, model = selected_provider(session)
     context = {
         **context,
-        "active_topic": context.get("thread_title") or context.get("node_title", ""),
+        "active_topic": (
+            context.get("focus_interaction", {}).get("prompt")
+            or context.get("thread_title") or context.get("node_title", "")
+        ),
         "scope": "thread" if context.get("thread_title") else "node",
     }
     resolved = resolve_question(provider, model, context, prompt)

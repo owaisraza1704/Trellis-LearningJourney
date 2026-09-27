@@ -123,15 +123,22 @@ function NodeWorkspace({
       text,
       action = 'question',
       sourcesOnly: onlySources = sourcesOnly,
+      replyToInteractionId,
     }: {
       text: string
       action?: string
       fromComposer?: boolean
       sourcesOnly?: boolean
+      replyToInteractionId?: string
     }) =>
       streamInteraction(
         threadId ? `/threads/${threadId}/interactions` : `/nodes/${nodeId}/interactions`,
-        { prompt: text, action, ...(onlySources ? { sources_only: true } : {}) },
+        {
+          prompt: text,
+          action,
+          ...(onlySources ? { sources_only: true } : {}),
+          ...(replyToInteractionId ? { reply_to_interaction_id: replyToInteractionId } : {}),
+        },
         setAnswerStage,
         (chunk) => {
           setAnswerStage('presenting')
@@ -563,39 +570,44 @@ function NodeWorkspace({
                 </article>
               )
             )}
-            <div className="mt-8 flex flex-wrap gap-2 border-t border-[#E3E0D8] pt-5">
-              {[
-                {
-                  action: 'example',
-                  label: 'Show example',
-                  text: `Give a practical example of ${title}.`,
-                },
-                {
-                  action: 'deeper',
-                  label: 'Go deeper',
-                  text: `Explain ${title} in more depth.`,
-                },
-                {
-                  action: 'comparison',
-                  label: 'Compare ideas',
-                  text: `Compare ${title} with a closely related concept.`,
-                },
-                {
-                  action: 'application',
-                  label: 'Apply it',
-                  text: `Explain how to apply ${title} in practice.`,
-                },
-              ].map((item) => (
-                <button
-                  key={item.action}
-                  className="btn-secondary"
-                  disabled={send.isPending || closed}
-                  onClick={() => send.mutate(item)}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
+            {active && !abstained && (
+              <div className="mt-8 flex flex-wrap gap-2 border-t border-[#E3E0D8] pt-5">
+                <p className="w-full text-[10px] uppercase tracking-widest text-[#A8A5A0]">
+                  Follow up on this answer
+                </p>
+                {[
+                  {
+                    action: 'example',
+                    label: 'Show example',
+                    text: `Show an example for the answer to: ${active.prompt.slice(0, 160)}`,
+                  },
+                  {
+                    action: 'deeper',
+                    label: 'Go deeper',
+                    text: `Go deeper into the answer to: ${active.prompt.slice(0, 160)}`,
+                  },
+                  {
+                    action: 'simplify',
+                    label: 'Explain simply',
+                    text: `Explain the answer to this more simply: ${active.prompt.slice(0, 160)}`,
+                  },
+                  {
+                    action: 'recap',
+                    label: 'Key takeaways',
+                    text: `Summarize the key takeaways from the answer to: ${active.prompt.slice(0, 160)}`,
+                  },
+                ].map((item) => (
+                  <button
+                    key={item.action}
+                    className="btn-secondary"
+                    disabled={send.isPending || closed}
+                    onClick={() => send.mutate({ ...item, replyToInteractionId: active.id })}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            )}
             {!threadId && (
               <div className="mt-8 flex justify-between gap-3 border-t border-[#E3E0D8] pt-5">
                 <button

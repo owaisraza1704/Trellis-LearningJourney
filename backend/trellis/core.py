@@ -127,13 +127,18 @@ def safe_thread_seed(session: Session, thread: Thread) -> str:
     return thread.seed_context
 
 
-def build_context(session: Session, node: Node, thread: Thread | None = None) -> dict:
+def build_context(
+    session: Session, node: Node, thread: Thread | None = None,
+    focus: Interaction | None = None,
+) -> dict:
     path = require(session, LearningPath, node.path_id)
     path_summary = path_detail(session, path)
     query = select(Interaction).where(Interaction.node_id == node.id)
     query = query.where(Interaction.thread_id == thread.id) if thread else query.where(
         Interaction.thread_id.is_(None)
     )
+    if focus:
+        query = query.where(Interaction.created_at <= focus.created_at)
     interactions = session.exec(query.order_by(Interaction.created_at.desc()).limit(12)).all()
     ancestors = []
     parent_id = node.parent_id
@@ -155,6 +160,10 @@ def build_context(session: Session, node: Node, thread: Thread | None = None) ->
     if thread:
         context.update(thread_id=thread.id, thread_title=thread.title,
                        seed_context=safe_thread_seed(session, thread))
+    if focus:
+        context["focus_interaction"] = {
+            "prompt": focus.prompt, "content": focus.content, "status": focus.status,
+        }
     return context
 
 
@@ -209,8 +218,12 @@ class ProgressInput(RequestBody):
 
 class MessageInput(RequestBody):
     prompt: str = InputField(min_length=1, max_length=12000)
-    action: Literal["foundation", "question", "example", "deeper", "comparison", "application"] = "question"
+    action: Literal[
+        "foundation", "question", "example", "deeper", "comparison", "application",
+        "simplify", "recap",
+    ] = "question"
     sources_only: bool = False
+    reply_to_interaction_id: str | None = None
 
 
 class ThreadInput(RequestBody):
@@ -513,7 +526,12 @@ def interact(
     require_learning_node(session, node)
     if thread and thread.status == "closed":
         raise HTTPException(409, "Reopen this thread before adding a message.")
-    context = build_context(session, node, thread)
+    focus = require(session, Interaction, body.reply_to_interaction_id) if body.reply_to_interaction_id else None
+    if focus and (focus.node_id != node.id or focus.thread_id != (thread.id if thread else None)):
+        raise HTTPException(422, "Choose a response from this conversation.")
+    if focus and focus.status == "abstained":
+        raise HTTPException(422, "Choose an answered response to follow up on.")
+    context = build_context(session, node, thread, focus)
     context["sources_only"] = body.sources_only
     context["answer_action"] = body.action
     if progress is None:

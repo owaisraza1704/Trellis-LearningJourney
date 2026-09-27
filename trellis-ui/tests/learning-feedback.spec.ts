@@ -727,9 +727,9 @@ for (const scenario of [
     const interactions = [answer]
     // Matching the quick-action text also checks that it cannot consume an unsent draft.
     const submitted = scenario.quickAction
-      ? 'Explain Motion in more depth.'
+      ? 'Go deeper into the answer to: Explain motion'
       : 'How is speed different?'
-    let request: { prompt: string; action: string } | undefined
+    let request: { prompt: string; action: string; reply_to_interaction_id?: string } | undefined
     let release!: () => void
     const pendingResponse = new Promise<void>((resolve) => {
       release = resolve
@@ -767,7 +767,11 @@ for (const scenario of [
     await expect(composer).toBeEnabled()
     await expect
       .poll(() => request)
-      .toEqual({ prompt: submitted, action: scenario.quickAction ? 'deeper' : 'question' })
+      .toEqual({
+        prompt: submitted,
+        action: scenario.quickAction ? 'deeper' : 'question',
+        ...(scenario.quickAction ? { reply_to_interaction_id: answer.id } : {}),
+      })
     if (scenario.nextDraft) await composer.fill(scenario.nextDraft)
     release()
     if (scenario.fails)

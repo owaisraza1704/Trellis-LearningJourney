@@ -49,6 +49,66 @@ def test_learning_action_reaches_answer_service(client, stub_ai):
     assert stub_ai[-1]["answer_action"] == "deeper"
 
 
+def test_followup_uses_the_selected_answer_and_only_its_earlier_history(client, stub_ai):
+    path = create_path(client)
+    node_id = path["nodes"][0]["id"]
+    client.post(f"/api/nodes/{node_id}/interactions", json={"prompt": "Which methods teach a model?"})
+    selected = client.post(f"/api/nodes/{node_id}/interactions", json={
+        "prompt": "Are there other training methods?",
+    }).json()
+    client.post(f"/api/nodes/{node_id}/interactions", json={"prompt": "What is prompt design?"})
+
+    response = client.post(f"/api/nodes/{node_id}/interactions", json={
+        "prompt": "Go deeper into the answer to: Are there other training methods?",
+        "action": "deeper", "reply_to_interaction_id": selected["id"],
+    })
+
+    assert response.status_code == 201
+    context = stub_ai[-1]
+    assert [item["prompt"] for item in context["history"]] == [
+        "Which methods teach a model?", "Are there other training methods?",
+    ]
+    assert context["focus_interaction"] == {
+        "prompt": selected["prompt"], "content": selected["content"], "status": "answered",
+    }
+    assert context["answer_action"] == "deeper"
+
+
+def test_followup_cannot_target_another_conversation_or_withheld_answer(client, session, stub_ai):
+    path = create_path(client)
+    first_node, second_node = [item["id"] for item in path["nodes"][:2]]
+    primary = client.post(f"/api/nodes/{first_node}/interactions", json={
+        "prompt": "Primary question",
+    }).json()
+    thread = client.post(f"/api/nodes/{first_node}/threads", json={"title": "Methods"}).json()
+    thread_answer = client.post(f"/api/threads/{thread['id']}/interactions", json={
+        "prompt": "Thread question",
+    }).json()
+    withheld = Interaction(path_id=path["id"], node_id=first_node, prompt="Unsupported",
+                           content="No supported answer", status="abstained")
+    session.add(withheld)
+    session.commit()
+
+    for endpoint, target in (
+        (f"/api/nodes/{second_node}/interactions", primary["id"]),
+        (f"/api/nodes/{first_node}/interactions", thread_answer["id"]),
+        (f"/api/threads/{thread['id']}/interactions", primary["id"]),
+        (f"/api/nodes/{first_node}/interactions", withheld.id),
+    ):
+        response = client.post(endpoint, json={
+            "prompt": "Go deeper", "action": "deeper", "reply_to_interaction_id": target,
+        })
+        assert response.status_code == 422
+
+    followed = client.post(f"/api/threads/{thread['id']}/interactions", json={
+        "prompt": "Show an example", "action": "example",
+        "reply_to_interaction_id": thread_answer["id"],
+    })
+    assert followed.status_code == 201
+    assert [item["prompt"] for item in stub_ai[-1]["history"]] == ["Thread question"]
+    assert stub_ai[-1]["focus_interaction"]["prompt"] == "Thread question"
+
+
 def test_streamed_answer_reveals_content_only_after_checks_and_save(client, stub_ai, session):
     path = create_path(client)
     node_id = path["nodes"][0]["id"]
