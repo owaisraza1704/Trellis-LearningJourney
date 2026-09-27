@@ -32,6 +32,59 @@ export async function api<T>(path: string, method = 'GET', body?: unknown): Prom
   return response.status === 204 ? (undefined as T) : response.json()
 }
 
+export async function streamInteraction(
+  path: string,
+  body: unknown,
+  onProgress: (stage: string) => void,
+  onText: (text: string) => void,
+): Promise<Interaction> {
+  const response = await fetch(`/api${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+    body: JSON.stringify(body),
+  }).catch(() => {
+    throw new ApiError('Could not reach Trellis. Please try again.', 0)
+  })
+  if (!response.ok) {
+    const data = await response.json().catch(() => null)
+    throw new ApiError(
+      data?.detail || `Request failed (${response.status}). Please try again.`,
+      response.status,
+    )
+  }
+  // Existing JSON responses remain usable by older servers and local browser fixtures.
+  if (response.headers.get('content-type')?.includes('application/json')) {
+    return response.json()
+  }
+  if (!response.body)
+    throw new ApiError('The answer stream could not be opened. Please try again.', 0)
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let pending = ''
+  let completed: Interaction | undefined
+  const readEvent = (line: string) => {
+    if (!line.trim()) return
+    const event = JSON.parse(line)
+    if (event.type === 'progress') onProgress(event.stage)
+    if (event.type === 'answer_delta') onText(event.text)
+    if (event.type === 'done') completed = event.interaction
+    if (event.type === 'error') throw new ApiError(event.message, event.status)
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    pending += decoder.decode(value, { stream: !done })
+    const lines = pending.split('\n')
+    pending = lines.pop() || ''
+    for (const line of lines) readEvent(line)
+    if (done) break
+  }
+  readEvent(pending)
+  if (!completed) throw new ApiError('The answer stream ended early. Please refresh this topic.', 0)
+  return completed
+}
+
 export interface LearningNode {
   id: string
   path_id: string

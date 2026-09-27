@@ -1,14 +1,20 @@
+import json
 import logging
-from typing import Literal
+import threading
+import time
+from queue import Queue
+from typing import Callable, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field as InputField, model_validator
 from sqlalchemy import delete, func, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, select
 
 from . import ai
 from .config import settings
-from .db import get_session
+from .db import engine, get_session
 from .models import (
     Activity, Chunk, ExportRecord, Interaction, LearningPath, LearningSession, Node, NotebookItem,
     NotebookPage, Source, StudySet, Thread, Workspace, utcnow,
@@ -500,14 +506,22 @@ def update_progress(node_id: str, body: ProgressInput, session: Session = Depend
     return node
 
 
-def interact(session: Session, node: Node, body: MessageInput, thread: Thread | None = None):
+def interact(
+    session: Session, node: Node, body: MessageInput, thread: Thread | None = None,
+    progress: Callable[[str], None] | None = None,
+):
     require_learning_node(session, node)
     if thread and thread.status == "closed":
         raise HTTPException(409, "Reopen this thread before adding a message.")
     context = build_context(session, node, thread)
     context["sources_only"] = body.sources_only
     context["answer_action"] = body.action
-    result = ai.answer(session, context, body.prompt)
+    if progress is None:
+        result = ai.answer(session, context, body.prompt)
+    else:
+        result = ai.answer(session, context, body.prompt, progress=progress)
+    if progress:
+        progress("saving")
     interaction = Interaction(path_id=node.path_id, node_id=node.id,
                               thread_id=thread.id if thread else None, prompt=body.prompt,
                               action=body.action, **result)
@@ -525,8 +539,62 @@ def interact(session: Session, node: Node, body: MessageInput, thread: Thread | 
     return interaction
 
 
+def stream_interaction(node_id: str, body: MessageInput, thread_id: str | None = None):
+    events: Queue[dict | None] = Queue()
+
+    def work() -> None:
+        try:
+            # The worker owns its session; a request-scoped session must not cross threads.
+            with Session(engine) as session:
+                node = require(session, Node, node_id)
+                thread = require(session, Thread, thread_id) if thread_id else None
+                interaction = interact(
+                    session, node, body, thread,
+                    progress=lambda stage: events.put({"type": "progress", "stage": stage}),
+                )
+                events.put({"type": "answer", "interaction": interaction.model_dump(mode="json")})
+        except HTTPException as error:
+            events.put({"type": "error", "message": str(error.detail), "status": error.status_code})
+        except SQLAlchemyError:
+            logger.exception("Could not save streamed interaction")
+            events.put({"type": "error", "message": "The local database is unavailable. Try again.",
+                        "status": 503})
+        except Exception:
+            logger.exception("Could not complete streamed interaction")
+            events.put({"type": "error", "message": "Could not complete the answer. Try again.",
+                        "status": 500})
+        finally:
+            events.put(None)
+
+    def chunks():
+        threading.Thread(target=work, daemon=True, name="trellis-answer").start()
+        while True:
+            event = events.get()
+            if event is None:
+                break
+            if event["type"] == "answer":
+                interaction = event["interaction"]
+                content = interaction["content"]
+                for offset in range(0, len(content), 180):
+                    yield json.dumps({"type": "answer_delta", "text": content[offset:offset + 180]},
+                                     ensure_ascii=False) + "\n"
+                    # A short pause lets the checked text appear progressively in the UI.
+                    time.sleep(0.04)
+                yield json.dumps({"type": "done", "interaction": interaction},
+                                 ensure_ascii=False) + "\n"
+            else:
+                yield json.dumps(event, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(chunks(), status_code=201, media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @router.post("/nodes/{node_id}/interactions", status_code=201)
-def node_interaction(node_id: str, body: MessageInput, session: Session = Depends(get_session)):
+def node_interaction(
+    node_id: str, body: MessageInput, request: Request, session: Session = Depends(get_session),
+):
+    if "application/x-ndjson" in request.headers.get("accept", ""):
+        return stream_interaction(node_id, body)
     return interact(session, require(session, Node, node_id), body)
 
 
@@ -573,8 +641,12 @@ def edit_thread(thread_id: str, body: ThreadEdit, session: Session = Depends(get
 
 
 @router.post("/threads/{thread_id}/interactions", status_code=201)
-def thread_interaction(thread_id: str, body: MessageInput, session: Session = Depends(get_session)):
+def thread_interaction(
+    thread_id: str, body: MessageInput, request: Request, session: Session = Depends(get_session),
+):
     thread = require(session, Thread, thread_id)
+    if "application/x-ndjson" in request.headers.get("accept", ""):
+        return stream_interaction(thread.node_id, body, thread_id)
     return interact(session, require(session, Node, thread.node_id), body, thread)
 
 

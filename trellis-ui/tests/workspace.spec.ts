@@ -170,6 +170,102 @@ test('thread answers stay on the thread endpoint and returning restores primary 
   ).toBeVisible()
 })
 
+test('question progress appears before the checked answer stream is shown', async ({ page }) => {
+  const answer = {
+    id: 'checked-answer',
+    path_id: path.id,
+    node_id: node.id,
+    thread_id: null,
+    prompt: 'What is a transaction?',
+    content: 'A transaction groups operations into one unit. [1]',
+    action: 'question',
+    status: 'answered',
+    evidence: [{ id: 'passage-1', title: 'Database guide', excerpt: 'A transaction is one unit.' }],
+    evaluation: { status: 'passed' },
+    provider: 'fixture',
+    model: 'fixture',
+    created_at: '2026-09-25T10:00:00Z',
+  }
+  let releaseAnswer!: () => void
+  const savedInteractions: object[] = []
+  const answerReady = new Promise<void>((resolve) => {
+    releaseAnswer = resolve
+  })
+  await page.route('**/api/**', async (route) => {
+    const url = new URL(route.request().url()).pathname
+    if (url === '/api/workspace') return route.fulfill({ json: workspace })
+    if (url === '/api/location') return route.fulfill({ json: {} })
+    if (url === `/api/nodes/${node.id}`)
+      return route.fulfill({
+        json: { node, path, nodes: [node], interactions: savedInteractions, threads: [] },
+      })
+    if (url === `/api/nodes/${node.id}/interactions`) {
+      expect(route.request().headers()['accept']).toBe('application/x-ndjson')
+      await answerReady
+      savedInteractions.push(answer)
+      const events = [
+        { type: 'progress', stage: 'finding_sources' },
+        { type: 'progress', stage: 'writing' },
+        { type: 'progress', stage: 'checking' },
+        { type: 'progress', stage: 'saving' },
+        { type: 'answer_delta', text: answer.content.slice(0, 25) },
+        { type: 'answer_delta', text: answer.content.slice(25) },
+        { type: 'done', interaction: answer },
+      ]
+      return route.fulfill({
+        contentType: 'application/x-ndjson',
+        body: events.map((event) => JSON.stringify(event)).join('\n') + '\n',
+      })
+    }
+    return route.fulfill({ status: 404, json: { detail: `Unexpected ${url}` } })
+  })
+
+  await page.goto(`/?screen=node&path=${path.id}&node=${node.id}`)
+  await page.getByLabel('Ask about this topic').fill(answer.prompt)
+  await page.getByRole('button', { name: 'Ask Trellis' }).click()
+  await expect(page.getByRole('region', { name: 'Answer in progress' })).toContainText(
+    'Understanding your question…',
+  )
+  releaseAnswer()
+  await expect(page.getByRole('heading', { name: answer.prompt })).toBeVisible()
+  await expect(
+    page.getByTestId('lesson').getByText('A transaction groups operations into one unit.'),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Read response to ' + answer.prompt }),
+  ).toBeVisible()
+})
+
+test('a failed answer stream shows the error without adding a response', async ({ page }) => {
+  await page.route('**/api/**', async (route) => {
+    const url = new URL(route.request().url()).pathname
+    if (url === '/api/workspace') return route.fulfill({ json: workspace })
+    if (url === '/api/location') return route.fulfill({ json: {} })
+    if (url === `/api/nodes/${node.id}`)
+      return route.fulfill({ json: { node, path, nodes: [node], interactions: [], threads: [] } })
+    if (url === `/api/nodes/${node.id}/interactions`)
+      return route.fulfill({
+        contentType: 'application/x-ndjson',
+        body:
+          [
+            { type: 'progress', stage: 'finding_sources' },
+            { type: 'error', message: 'The model is unavailable.', status: 503 },
+          ]
+            .map((event) => JSON.stringify(event))
+            .join('\n') + '\n',
+      })
+    return route.fulfill({ status: 404, json: { detail: `Unexpected ${url}` } })
+  })
+
+  await page.goto(`/?screen=node&path=${path.id}&node=${node.id}`)
+  await page.getByLabel('Ask about this topic').fill('What is a transaction?')
+  await page.getByRole('button', { name: 'Ask Trellis' }).click()
+  await expect(
+    page.getByRole('alert').filter({ hasText: 'The model is unavailable.' }),
+  ).toBeVisible()
+  await expect(page.getByRole('button', { name: /Read response to/ })).toHaveCount(0)
+})
+
 test('failed creation displays the server error and does not claim success', async ({ page }) => {
   await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url()).pathname

@@ -138,8 +138,9 @@ test('a question can grow journey sources while retaining one selected lesson an
   await page.getByRole('button', { name: 'Ask Trellis', exact: true }).click()
   await expect(
     page
+      .getByTestId('study-tools')
       .getByRole('status')
-      .filter({ hasText: 'Checking your sources and searching the web if needed…' }),
+      .filter({ hasText: 'Understanding your question…' }),
   ).toBeVisible()
   await expect(
     page.getByRole('region', { name: 'Lesson', exact: true }).locator('article'),

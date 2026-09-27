@@ -37,9 +37,11 @@ def client(session, db_engine, tmp_path, monkeypatch):
     from trellis.config import settings
     from trellis import evidence
     from trellis import main
+    from trellis import core
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     monkeypatch.setattr(evidence, "engine", db_engine)
     monkeypatch.setattr(main, "engine", db_engine)
+    monkeypatch.setattr(core, "engine", db_engine)
     app.dependency_overrides[get_session] = lambda: session
     with TestClient(app, raise_server_exceptions=True) as client:
         yield client
@@ -58,8 +60,11 @@ def stub_ai(monkeypatch):
             {"title": "Mappings", "description": "Dictionaries", "parent_index": None},
         ]}
 
-    def answer(session, context, prompt):
+    def answer(session, context, prompt, progress=None):
         contexts.append(copy.deepcopy(context))
+        if progress:
+            for stage in ("understanding", "finding_sources", "writing", "checking"):
+                progress(stage)
         return {"content": "A fixture explanation about " + context["node_title"],
                 "status": "answered", "evidence": [], "evaluation": {"status": "test_fixture"},
                 "provider": "fixture", "model": "fixture"}

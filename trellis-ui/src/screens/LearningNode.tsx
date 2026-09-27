@@ -14,6 +14,7 @@ import {
 import {
   api,
   date,
+  streamInteraction,
   type Evidence,
   type Interaction,
   type Navigate,
@@ -28,6 +29,16 @@ import GeneralKnowledgeNotice from '../components/GeneralKnowledgeNotice'
 import StudyPanels from '../components/StudyPanels'
 import { assessmentText, responseFeedback } from '../lib/response'
 import { sourceOriginLabel } from '../lib/source'
+
+const answerStages: Record<string, string> = {
+  understanding: 'Understanding your question…',
+  finding_sources: 'Finding relevant sources…',
+  searching_web: 'Searching the web for stronger evidence…',
+  writing: 'Writing an explanation…',
+  checking: 'Checking claims and citations…',
+  saving: 'Saving the checked answer…',
+  presenting: 'Showing the checked answer…',
+}
 
 export default function LearningNode(props: {
   nodeId?: string
@@ -68,6 +79,8 @@ function NodeWorkspace({
   const client = useQueryClient()
   const [prompt, setPrompt] = useState('')
   const [sourcesOnly, setSourcesOnly] = useState(false)
+  const [answerStage, setAnswerStage] = useState('understanding')
+  const [streamedText, setStreamedText] = useState('')
   const [rightPanel, setRightPanel] = useState('ai')
   const [focusedCitation, setFocusedCitation] = useState<number | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
@@ -116,16 +129,38 @@ function NodeWorkspace({
       fromComposer?: boolean
       sourcesOnly?: boolean
     }) =>
-      api<Interaction>(
+      streamInteraction(
         threadId ? `/threads/${threadId}/interactions` : `/nodes/${nodeId}/interactions`,
-        'POST',
         { prompt: text, action, ...(onlySources ? { sources_only: true } : {}) },
+        setAnswerStage,
+        (chunk) => {
+          setAnswerStage('presenting')
+          setStreamedText((current) => current + chunk)
+        },
       ),
+    onMutate: () => {
+      setAnswerStage('understanding')
+      setStreamedText('')
+    },
     onSuccess: (data, variables) => {
       if (variables.fromComposer) {
         setPrompt((current) => (current === variables.text ? '' : current))
       }
+      if (threadId) {
+        client.setQueryData<ThreadDetail>(['thread', threadId], (current) =>
+          current && !current.interactions.some((item) => item.id === data.id)
+            ? { ...current, interactions: [...current.interactions, data] }
+            : current,
+        )
+      } else {
+        client.setQueryData<NodeDetail>(['node', nodeId], (current) =>
+          current && !current.interactions.some((item) => item.id === data.id)
+            ? { ...current, interactions: [...current.interactions, data] }
+            : current,
+        )
+      }
       setSelected(data.id)
+      setStreamedText('')
       client.invalidateQueries({
         queryKey: [threadId ? 'thread' : 'node', threadId || nodeId],
       })
@@ -356,6 +391,23 @@ function NodeWorkspace({
               </div>
             )}
             <ErrorNotice error={send.error || update.error} />
+            {send.isPending && (
+              <section
+                role="region"
+                aria-label="Answer in progress"
+                className="mb-5 rounded-xl border border-[#E3E0D8] bg-[#FAF9F6] p-5"
+              >
+                <p className="text-xs font-medium text-[#5B7A58]">
+                  {answerStages[answerStage] || 'Preparing your answer…'}
+                </p>
+                <h2 className="mt-2 font-display text-lg">{send.variables?.text}</h2>
+                {streamedText && (
+                  <div className="mt-4">
+                    <Markdown>{streamedText}</Markdown>
+                  </div>
+                )}
+              </section>
+            )}
             {saved && (
               <div
                 role="status"
@@ -653,7 +705,7 @@ function NodeWorkspace({
                   ))}
                   {send.isPending && (
                     <div>
-                      <Loading label="Checking your sources and searching the web if needed…" />
+                      <Loading label={answerStages[answerStage] || 'Preparing your answer…'} />
                       {!(send.variables?.sourcesOnly ?? sourcesOnly) && (
                         <p className="mt-1 text-[10px] text-[#7A7870]">
                           If evidence is insufficient, Trellis may provide a labelled general AI

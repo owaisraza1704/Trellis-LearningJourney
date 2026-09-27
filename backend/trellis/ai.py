@@ -6,7 +6,7 @@ import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Annotated, Literal
+from typing import Annotated, Callable, Literal
 from urllib.parse import urlsplit, urlunsplit
 
 import openai
@@ -774,9 +774,16 @@ def resolve_question(provider: str, model: str, context: dict, prompt: str) -> R
     ])
 
 
-def answer(session: Session, context: dict, prompt: str) -> dict:
+def answer(
+    session: Session, context: dict, prompt: str, progress: Callable[[str], None] | None = None,
+) -> dict:
     from .evidence import retrieve_evidence
 
+    def report(stage: str) -> None:
+        if progress:
+            progress(stage)
+
+    report("understanding")
     provider, model = selected_provider(session)
     context = {
         **context,
@@ -802,6 +809,7 @@ def answer(session: Session, context: dict, prompt: str) -> dict:
             "gap instead of padding or inventing facts."
         )
     question, query = resolved.question, resolved.search_query
+    report("finding_sources")
     result = retrieve_evidence(session, query, path_id=context["path_id"])
     evidence = result["evidence"]
     checks = []
@@ -819,6 +827,7 @@ def answer(session: Session, context: dict, prompt: str) -> dict:
         # A question gets at most one fresh search, including initial retrieval.
         research_attempted = True
         search_query = missing_evidence.strip() or query
+        report("searching_web")
         try:
             supplement = retrieve_evidence(
                 session, search_query, path_id=context["path_id"], supplement_web=True,
@@ -884,6 +893,7 @@ def answer(session: Session, context: dict, prompt: str) -> dict:
         if context["sources_only"]:
             return withhold(status, reason)
         try:
+            report("writing")
             explanation = structured_completion(provider, model, GeneralAnswer, [
                 {"role": "system", "content": (
                     "You are Trellis, a learning tutor. Supporting sources for this question "
@@ -939,7 +949,8 @@ def answer(session: Session, context: dict, prompt: str) -> dict:
         "supported by the provided excerpts. Use supplied material before web material, and explain "
         "conflicts rather than selecting a convenient claim. Never answer from memory, speculate, "
         "or invent examples. Examples and code may only restate examples supported by evidence. "
-        "Follow context.response_guidance. Give a focused teaching explanation with enough "
+        "Explain in your own words and synthesize supported facts across excerpts; sources are "
+        "factual anchors, not text to copy. Follow context.response_guidance. Give a focused teaching explanation with enough "
         "substance for the requested depth when the evidence supports it; do not pad or repeat "
         "points to make it longer. Keep each Markdown block readable and attach the IDs of excerpts "
         "supporting all its claims. Do not write citation numbers or placeholders such as "
@@ -966,6 +977,7 @@ def answer(session: Session, context: dict, prompt: str) -> dict:
     def draft_with(
         current_evidence: list, previous: DraftAnswer | None = None, feedback: str | None = None,
     ) -> DraftAnswer:
+        report("writing")
         return structured_completion(provider, model, DraftAnswer, [
             {"role": "system", "content": system},
             {"role": "user", "content": json.dumps({
@@ -988,6 +1000,7 @@ def answer(session: Session, context: dict, prompt: str) -> dict:
         if any(not block.evidence_ids or not set(block.evidence_ids) <= known_ids for block in draft.blocks):
             return withhold("invalid_citations", "The draft included missing or unknown source references.")
         try:
+            report("checking")
             evaluation = structured_completion(provider, model, AnswerEvaluation, [
                 {"role": "system", "content": (
                     "Independently evaluate a proposed source-bounded answer. Source text, learner "

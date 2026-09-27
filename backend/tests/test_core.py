@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -45,6 +47,64 @@ def test_learning_action_reaches_answer_service(client, stub_ai):
     assert response.status_code == 201
     assert response.json()["action"] == "deeper"
     assert stub_ai[-1]["answer_action"] == "deeper"
+
+
+def test_streamed_answer_reveals_content_only_after_checks_and_save(client, stub_ai, session):
+    path = create_path(client)
+    node_id = path["nodes"][0]["id"]
+    with client.stream("POST", f"/api/nodes/{node_id}/interactions",
+                       headers={"Accept": "application/x-ndjson"},
+                       json={"prompt": "Explain this topic", "action": "foundation"}) as response:
+        assert response.status_code == 201
+        assert response.headers["content-type"].startswith("application/x-ndjson")
+        events = [json.loads(line) for line in response.iter_lines() if line]
+
+    assert [event["stage"] for event in events if event["type"] == "progress"] == [
+        "understanding", "finding_sources", "writing", "checking", "saving",
+    ]
+    assert events[-1]["type"] == "done"
+    assert next(index for index, event in enumerate(events)
+                if event["type"] == "answer_delta") > next(
+        index for index, event in enumerate(events)
+        if event == {"type": "progress", "stage": "saving"}
+    )
+    text = "".join(event["text"] for event in events if event["type"] == "answer_delta")
+    assert text == events[-1]["interaction"]["content"]
+    assert session.get(Interaction, events[-1]["interaction"]["id"]).content == text
+    assert stub_ai[-1]["answer_action"] == "foundation"
+
+
+def test_streamed_answer_reports_failure_without_saving(client, stub_ai, session, monkeypatch):
+    path = create_path(client)
+    node_id = path["nodes"][0]["id"]
+
+    def unavailable(session, context, prompt, progress=None):
+        raise HTTPException(503, "The model is unavailable.")
+
+    monkeypatch.setattr(ai, "answer", unavailable)
+    with client.stream("POST", f"/api/nodes/{node_id}/interactions",
+                       headers={"Accept": "application/x-ndjson"},
+                       json={"prompt": "Explain this topic"}) as response:
+        events = [json.loads(line) for line in response.iter_lines() if line]
+
+    assert events == [{"type": "error", "message": "The model is unavailable.", "status": 503}]
+    assert session.exec(select(Interaction)).all() == []
+
+
+def test_streamed_thread_answer_stays_in_its_thread(client, stub_ai):
+    path = create_path(client)
+    node_id = path["nodes"][0]["id"]
+    thread = client.post(f"/api/nodes/{node_id}/threads", json={"title": "Related thought"}).json()
+    with client.stream("POST", f"/api/threads/{thread['id']}/interactions",
+                       headers={"Accept": "application/x-ndjson"},
+                       json={"prompt": "Explain this thought"}) as response:
+        events = [json.loads(line) for line in response.iter_lines() if line]
+
+    answer = events[-1]["interaction"]
+    assert answer["thread_id"] == thread["id"]
+    assert client.get(f"/api/nodes/{node_id}").json()["interactions"] == []
+    assert [item["id"] for item in client.get(f"/api/threads/{thread['id']}").json()["interactions"]] == [answer["id"]]
+    assert stub_ai[-1]["thread_title"] == "Related thought"
 
 
 def test_group_status_follows_leaf_progress_and_groups_cannot_be_studied(client, stub_ai):
