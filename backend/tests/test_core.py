@@ -36,6 +36,65 @@ def test_curriculum_edits_reorder_and_progress_survive_new_client(client, stub_a
     assert stub_ai[-1]["node_count"] == 3
 
 
+def test_group_status_follows_leaf_progress_and_groups_cannot_be_studied(client, stub_ai):
+    path = create_path(client)
+    group, another_leaf, _ = [node["id"] for node in path["nodes"]]
+    first = client.post(f"/api/paths/{path['id']}/nodes", json={
+        "title": "First subtopic", "parent_id": group,
+    }).json()["id"]
+    nested_group = client.post(f"/api/paths/{path['id']}/nodes", json={
+        "title": "Nested group", "parent_id": group,
+    }).json()["id"]
+    nested_leaf = client.post(f"/api/paths/{path['id']}/nodes", json={
+        "title": "Nested subtopic", "parent_id": nested_group,
+    }).json()["id"]
+
+    def snapshot():
+        detail = client.get(f"/api/paths/{path['id']}").json()
+        return detail, {node["id"]: node["status"] for node in detail["nodes"]}
+
+    detail, statuses = snapshot()
+    assert detail["node_count"] == 4
+    assert detail["progress"] == 0
+    assert statuses[group] == statuses[nested_group] == "not_started"
+    for route, method, body in (
+        (f"/api/nodes/{group}", "get", None),
+        (f"/api/nodes/{group}/progress", "patch", {"status": "completed"}),
+        (f"/api/nodes/{group}/interactions", "post", {"prompt": "Study parent"}),
+        (f"/api/nodes/{group}/threads", "post", {"title": "Group thread"}),
+        ("/api/location", "put", {"path_id": path["id"], "node_id": group}),
+    ):
+        assert client.request(method, route, json=body).status_code == 409
+
+    assert client.patch(f"/api/nodes/{first}/progress", json={"status": "completed"}).status_code == 200
+    detail, statuses = snapshot()
+    assert statuses[group] == "in_progress"
+    assert statuses[nested_group] == "not_started"
+    assert detail["completed_count"] == 1 and detail["progress"] == 25
+    assert client.get("/api/paths").json()[0]["progress"] == 25
+
+    assert client.patch(f"/api/nodes/{nested_leaf}/progress", json={"status": "in_progress"}).status_code == 200
+    _, statuses = snapshot()
+    assert statuses[group] == statuses[nested_group] == "in_progress"
+    assert client.patch(f"/api/nodes/{nested_leaf}/progress", json={"status": "completed"}).status_code == 200
+    detail, statuses = snapshot()
+    assert statuses[group] == statuses[nested_group] == "completed"
+    assert detail["completed_count"] == 2 and detail["progress"] == 50
+    assert client.patch(f"/api/nodes/{another_leaf}/progress", json={"status": "completed"}).status_code == 200
+    assert client.get("/api/paths").json()[0]["completed_count"] == 3
+
+
+def test_studied_leaf_cannot_be_converted_into_a_group(client, stub_ai):
+    path = create_path(client)
+    studied, candidate = [node["id"] for node in path["nodes"][:2]]
+    assert client.patch(f"/api/nodes/{studied}/progress", json={"status": "in_progress"}).status_code == 200
+    assert client.post(f"/api/paths/{path['id']}/nodes", json={
+        "title": "New child", "parent_id": studied,
+    }).status_code == 409
+    assert client.patch(f"/api/nodes/{candidate}", json={"parent_id": studied}).status_code == 409
+    assert client.get(f"/api/nodes/{studied}").status_code == 200
+
+
 @pytest.mark.parametrize("manual_status", [None, "completed", "in_progress"])
 def test_first_answer_respects_progress_changed_while_generating(
     client, db_engine, stub_ai, monkeypatch, manual_status,
@@ -108,7 +167,10 @@ def test_resume_thread_and_closed_thread_rules(client, stub_ai):
 def test_invalid_relationships_and_destructive_edits_are_rejected(client, stub_ai):
     path = create_path(client)
     other = create_path(client, "Learn SQL")
-    parent, child, leaf = [node["id"] for node in path["nodes"]]
+    parent, _, leaf = [node["id"] for node in path["nodes"]]
+    child = client.post(f"/api/paths/{path['id']}/nodes", json={
+        "title": "A child topic", "parent_id": parent,
+    }).json()["id"]
     foreign = other["nodes"][0]["id"]
     assert client.patch(f"/api/nodes/{parent}", json={"parent_id": child}).status_code == 422
     assert client.patch(f"/api/nodes/{child}", json={"parent_id": foreign}).status_code == 422

@@ -42,12 +42,49 @@ def workspace(session: Session) -> Workspace:
 
 def path_detail(session: Session, path: LearningPath) -> dict:
     nodes = session.exec(select(Node).where(Node.path_id == path.id).order_by(Node.position)).all()
-    completed = sum(node.status == "completed" for node in nodes)
+    children_by_parent: dict[str, list[Node]] = {}
+    for node in nodes:
+        if node.parent_id:
+            children_by_parent.setdefault(node.parent_id, []).append(node)
+
+    def visible_status(node: Node) -> str:
+        children = children_by_parent.get(node.id, [])
+        if not children:
+            return node.status
+        statuses = [visible_status(child) for child in children]
+        if all(status == "completed" for status in statuses):
+            return "completed"
+        if any(status != "not_started" for status in statuses):
+            return "in_progress"
+        return "not_started"
+
+    learning_nodes = [node for node in nodes if node.id not in children_by_parent]
+    completed = sum(node.status == "completed" for node in learning_nodes)
     return {
-        **path.model_dump(), "nodes": [node.model_dump() for node in nodes],
-        "node_count": len(nodes), "completed_count": completed,
-        "progress": round(100 * completed / len(nodes)) if nodes else 0,
+        **path.model_dump(),
+        "nodes": [{**node.model_dump(), "status": visible_status(node)} for node in nodes],
+        "node_count": len(learning_nodes), "completed_count": completed,
+        "progress": round(100 * completed / len(learning_nodes)) if learning_nodes else 0,
     }
+
+
+def require_learning_node(session: Session, node: Node):
+    if session.exec(select(Node.id).where(Node.parent_id == node.id)).first():
+        raise HTTPException(409, "This topic groups subtopics. Open a child topic to study.")
+
+
+def require_available_group(session: Session, node: Node):
+    if session.exec(select(Node.id).where(Node.parent_id == node.id)).first():
+        return
+    has_study = (
+        node.status != "not_started"
+        or session.exec(select(Interaction.id).where(Interaction.node_id == node.id)).first()
+        or session.exec(select(Thread.id).where(Thread.node_id == node.id)).first()
+        or session.exec(select(NotebookItem.id).where(NotebookItem.node_id == node.id)).first()
+        or session.exec(select(LearningSession.id).where(LearningSession.node_id == node.id)).first()
+    )
+    if has_study:
+        raise HTTPException(409, "A studied topic cannot become a group. Add a new parent topic instead.")
 
 
 def activity(session: Session, kind: str, label: str, node: Node | None = None,
@@ -86,6 +123,7 @@ def safe_thread_seed(session: Session, thread: Thread) -> str:
 
 def build_context(session: Session, node: Node, thread: Thread | None = None) -> dict:
     path = require(session, LearningPath, node.path_id)
+    path_summary = path_detail(session, path)
     query = select(Interaction).where(Interaction.node_id == node.id)
     query = query.where(Interaction.thread_id == thread.id) if thread else query.where(
         Interaction.thread_id.is_(None)
@@ -101,8 +139,8 @@ def build_context(session: Session, node: Node, thread: Thread | None = None) ->
         "path_id": path.id, "path_title": path.title, "node_id": node.id,
         "node_title": node.title, "node_description": node.description,
         "node_position": node.position,
-        "node_count": session.exec(select(func.count()).select_from(Node).where(Node.path_id == path.id)).one(),
-        "ancestors": ancestors, "progress": path_detail(session, path)["progress"],
+        "node_count": path_summary["node_count"],
+        "ancestors": ancestors, "progress": path_summary["progress"],
         "history": [{"prompt": item.prompt,
                      "content": item.content if item.status != "abstained" else WITHHELD_ANSWER,
                      "status": item.status, "sources_only": item.evaluation.get("sources_only", False)}
@@ -188,13 +226,14 @@ class LocationInput(RequestBody):
 @router.get("/paths")
 def list_paths(session: Session = Depends(get_session)):
     paths = session.exec(select(LearningPath).order_by(LearningPath.updated_at.desc())).all()
-    node_counts = {
-        path_id: (count, completed)
-        for path_id, count, completed in session.exec(select(
-            Node.path_id, func.count(Node.id), func.count(Node.id).filter(Node.status == "completed"),
-        ).group_by(Node.path_id)).all()
-    }
-    # PostgreSQL returns one most recently studied location per journey.
+    node_rows = session.exec(select(Node.path_id, Node.id, Node.parent_id, Node.status)).all()
+    group_ids = {parent_id for _, _, parent_id, _ in node_rows if parent_id}
+    node_counts: dict[str, tuple[int, int]] = {}
+    for path_id, node_id, _, status in node_rows:
+        if node_id in group_ids:
+            continue
+        count, completed = node_counts.get(path_id, (0, 0))
+        node_counts[path_id] = (count + 1, completed + (status == "completed"))
     latest_sessions = {
         period.path_id: period
         for period in session.exec(select(LearningSession)
@@ -350,8 +389,11 @@ def delete_path(path_id: str, session: Session = Depends(get_session)):
 @router.post("/paths/{path_id}/nodes", status_code=201)
 def add_node(path_id: str, body: NodeInput, session: Session = Depends(get_session)):
     require(session, LearningPath, path_id)
-    if body.parent_id and require(session, Node, body.parent_id).path_id != path_id:
-        raise HTTPException(422, "Parent must belong to this journey.")
+    if body.parent_id:
+        parent = require(session, Node, body.parent_id)
+        if parent.path_id != path_id:
+            raise HTTPException(422, "Parent must belong to this journey.")
+        require_available_group(session, parent)
     count = session.exec(select(func.count()).select_from(Node).where(Node.path_id == path_id)).one()
     node = Node(path_id=path_id, position=count, **body.model_dump())
     session.add(node)
@@ -372,6 +414,8 @@ def edit_node(node_id: str, body: NodeEdit, session: Session = Depends(get_sessi
             parent = require(session, Node, parent_id)
             if parent.path_id != node.path_id:
                 raise HTTPException(422, "Parent must belong to this journey.")
+            if parent_id == body.parent_id and parent_id != node.parent_id:
+                require_available_group(session, parent)
             parent_id = parent.parent_id
         node.parent_id = body.parent_id
     for key, value in body.model_dump(exclude_unset=True, exclude_none=True, exclude={"parent_id"}).items():
@@ -435,6 +479,7 @@ def reorder_nodes(path_id: str, body: ReorderInput, session: Session = Depends(g
 @router.get("/nodes/{node_id}")
 def get_node(node_id: str, session: Session = Depends(get_session)):
     node = require(session, Node, node_id)
+    require_learning_node(session, node)
     path = path_detail(session, require(session, LearningPath, node.path_id))
     return {"node": node, "path": {key: value for key, value in path.items() if key != "nodes"},
             "nodes": path["nodes"], "threads": session.exec(select(Thread).where(Thread.node_id == node_id)
@@ -446,6 +491,7 @@ def get_node(node_id: str, session: Session = Depends(get_session)):
 @router.patch("/nodes/{node_id}/progress")
 def update_progress(node_id: str, body: ProgressInput, session: Session = Depends(get_session)):
     node = require(session, Node, node_id)
+    require_learning_node(session, node)
     node.status = body.status
     session.add(node)
     activity(session, "progress", f"{node.title}: {body.status.replace('_', ' ')}", node=node)
@@ -455,6 +501,7 @@ def update_progress(node_id: str, body: ProgressInput, session: Session = Depend
 
 
 def interact(session: Session, node: Node, body: MessageInput, thread: Thread | None = None):
+    require_learning_node(session, node)
     if thread and thread.status == "closed":
         raise HTTPException(409, "Reopen this thread before adding a message.")
     context = build_context(session, node, thread)
@@ -485,6 +532,7 @@ def node_interaction(node_id: str, body: MessageInput, session: Session = Depend
 @router.post("/nodes/{node_id}/threads", status_code=201)
 def create_thread(node_id: str, body: ThreadInput, session: Session = Depends(get_session)):
     node = require(session, Node, node_id)
+    require_learning_node(session, node)
     seed = f"Origin topic: {node.title}. {node.description}"
     if body.interaction_id:
         source = require(session, Interaction, body.interaction_id)
@@ -547,6 +595,7 @@ def set_location(body: LocationInput, session: Session = Depends(get_session)):
         node = require(session, Node, body.node_id)
         if node.path_id != body.path_id:
             raise HTTPException(422, "The node must belong to the selected journey.")
+        require_learning_node(session, node)
     if body.thread_id:
         thread = require(session, Thread, body.thread_id)
         if thread.node_id != body.node_id or thread.path_id != body.path_id:

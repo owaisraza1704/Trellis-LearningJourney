@@ -167,6 +167,7 @@ export default function CurriculumGraph({
     siblings.push(node)
     childrenByParent.set(node.parent_id, siblings)
   }
+  const isGroup = (nodeId: string) => (childrenByParent.get(nodeId)?.length || 0) > 0
   const outlineRows: { node: LearningNode; depth: number }[] = []
   function addOutlineRows(parentId: string | null, depth: number) {
     for (const node of childrenByParent.get(parentId) || []) {
@@ -293,8 +294,8 @@ export default function CurriculumGraph({
           <h1 className="font-display text-3xl font-light">{path.data.title}</h1>
           <p className="mt-2 text-sm text-[#7A7870]">{path.data.description}</p>
           <p className="mt-3 text-xs text-[#5B7A58]">
-            {nodes.filter((node) => node.status === 'completed').length} of {nodes.length} nodes
-            complete · {Math.round(path.data.progress)}%
+            {path.data.completed_count} of {path.data.node_count} learning topics complete ·{' '}
+            {Math.round(path.data.progress)}%
           </p>
         </div>
         <div className="flex gap-2">
@@ -495,9 +496,10 @@ export default function CurriculumGraph({
                   nodesDraggable={false}
                   nodesConnectable={false}
                   onNodeClick={(_, node) => setSelectedId(node.id)}
-                  onNodeDoubleClick={(_, node) =>
-                    onNavigate('node', { path_id: pathId, node_id: node.id })
-                  }
+                  onNodeDoubleClick={(_, node) => {
+                    if (isGroup(node.id)) setSelectedId(node.id)
+                    else onNavigate('node', { path_id: pathId, node_id: node.id })
+                  }}
                 >
                   <Background color="#E3E0D8" gap={22} />
                   <Controls showInteractive={false} />
@@ -589,7 +591,7 @@ export default function CurriculumGraph({
         {selected && (
           <aside className="w-full self-start rounded-xl border border-[#E3E0D8] bg-white p-5 xl:w-72">
             <p className="mb-3 text-xs uppercase tracking-widest text-[#A8A5A0]">
-              Selected learning node
+              {isGroup(selected.id) ? 'Selected topic group' : 'Selected learning node'}
             </p>
             <h2 className="font-display text-xl">{selected.title}</h2>
             <div className="my-3">
@@ -598,6 +600,11 @@ export default function CurriculumGraph({
             <p className="text-sm text-[#7A7870]">
               {selected.description || 'Add a description to guide this topic.'}
             </p>
+            {isGroup(selected.id) && (
+              <p className="mt-3 text-xs text-[#5B7A58]">
+                This group organizes its subtopics. Select a learning topic inside it to study.
+              </p>
+            )}
             {nodeSources.length > 0 && (
               <div className="mt-4 border-t border-[#E3E0D8] pt-4 text-xs">
                 <p className="mb-2 font-medium text-[#7A7870]">Original sources for this topic</p>
@@ -611,34 +618,38 @@ export default function CurriculumGraph({
                 </ul>
               </div>
             )}
-            <button
-              className="btn mt-5 w-full"
-              onClick={() => onNavigate('node', { path_id: pathId, node_id: selected.id })}
-            >
-              Open learning node <ArrowRight size={14} />
-            </button>
+            {!isGroup(selected.id) && (
+              <button
+                className="btn mt-5 w-full"
+                onClick={() => onNavigate('node', { path_id: pathId, node_id: selected.id })}
+              >
+                Open learning node <ArrowRight size={14} />
+              </button>
+            )}
             <div className="mt-3 flex gap-2">
               <button className="btn-secondary flex-1" onClick={() => setEditor(selected)}>
                 <Pencil size={13} /> Edit
               </button>
-              <button
-                className="btn-secondary"
-                aria-label="Delete selected topic"
-                disabled={mutate.isPending}
-                onClick={() => {
-                  if (
-                    confirm(
-                      'Delete this topic? Only empty topics without learning history can be removed.',
+              {!isGroup(selected.id) && (
+                <button
+                  className="btn-secondary"
+                  aria-label="Delete selected topic"
+                  disabled={mutate.isPending}
+                  onClick={() => {
+                    if (
+                      confirm(
+                        'Delete this topic? Only empty topics without learning history can be removed.',
+                      )
                     )
-                  )
-                    mutate.mutate({
-                      route: `/nodes/${selected.id}`,
-                      method: 'DELETE',
-                    })
-                }}
-              >
-                <Trash2 size={13} />
-              </button>
+                      mutate.mutate({
+                        route: `/nodes/${selected.id}`,
+                        method: 'DELETE',
+                      })
+                  }}
+                >
+                  <Trash2 size={13} />
+                </button>
+              )}
             </div>
           </aside>
         )}

@@ -192,7 +192,9 @@ function NodeWorkspace({
   }
   const closed = thread.data?.thread.status === 'closed'
   const title = threadId ? thread.data!.thread.title : current.title
-  const next = nodes.find(
+  const groupIds = new Set(nodes.map((item) => item.parent_id).filter(Boolean))
+  const learningNodes = nodes.filter((item) => !groupIds.has(item.id))
+  const next = learningNodes.find(
     (item) => item.id !== nodeId && item.position > current.position && item.status !== 'completed',
   )
   const threadOrigin = { path_id: path.id, node_id: nodeId }
@@ -233,7 +235,7 @@ function NodeWorkspace({
           <button
             key={item.id}
             className="mb-2 block text-left text-xs text-[#A8A5A0]"
-            onClick={() => onNavigate('node', { path_id: path.id, node_id: item.id })}
+            onClick={() => onNavigate('graph', { path_id: path.id })}
           >
             › {item.title}
           </button>
@@ -558,7 +560,7 @@ function NodeWorkspace({
                     Next topic <ArrowRight size={14} />
                   </button>
                 ) : current.status === 'completed' &&
-                  nodes.some((item) => item.status !== 'completed') ? (
+                  learningNodes.some((item) => item.status !== 'completed') ? (
                   <button className="btn" onClick={() => onNavigate('graph', { path_id: path.id })}>
                     Return to remaining topics <ArrowRight size={14} />
                   </button>

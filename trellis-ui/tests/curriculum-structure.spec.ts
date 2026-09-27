@@ -131,7 +131,7 @@ test('a Python topic hierarchy keeps parent relationships and distinguishes stud
     ...systemDesign,
     id: 'python',
     title: 'Python Lists',
-    node_count: 4,
+    node_count: 2,
     nodes: [
       { id: 'lists', title: 'Python Lists', parent_id: null },
       { id: 'append', title: 'Adding Values with append()', parent_id: 'lists' },
@@ -142,7 +142,7 @@ test('a Python topic hierarchy keeps parent relationships and distinguishes stud
       path_id: 'python',
       description: '',
       position,
-      status: node.id === 'append' ? 'in_progress' : 'not_started',
+      status: node.id === 'append' || node.id === 'lists' ? 'in_progress' : 'not_started',
     })),
   }
   const state = await mockCurriculum(page, python, 'append')
@@ -172,6 +172,10 @@ test('a Python topic hierarchy keeps parent relationships and distinguishes stud
   await expect(graph.locator('[data-id="append"]')).toContainText('Last studied')
   await expect(graph).not.toContainText('Current topic')
   await expect(graph).not.toContainText('Step 1')
+  await graph.locator('[data-id="lists"]').dblclick()
+  await expect(page).toHaveURL(/screen=graph/)
+  await expect(page.getByText('Selected topic group')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Open learning node' })).toHaveCount(0)
   await page.getByRole('button', { name: 'Outline', exact: true }).click()
   await expect(
     page.getByRole('button', {
@@ -203,6 +207,12 @@ test('a Python topic hierarchy keeps parent relationships and distinguishes stud
   await expect(child).toHaveCount(0)
   await page.getByRole('button', { name: 'Expand Python Lists' }).click()
   await expect(child).toBeVisible()
+
+  await child.click()
+  await expect(page.getByText('Selected topic group')).toBeVisible()
+  await grandchild.click()
+  await expect(page.getByText('Selected learning node')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Open learning node' })).toBeVisible()
 
   await page.getByRole('button', { name: 'Move Removing Values with pop() up' }).click()
   await expect.poll(() => state.reordered).toEqual([['lists', 'pop', 'stacks', 'append']])

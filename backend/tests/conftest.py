@@ -54,8 +54,8 @@ def stub_ai(monkeypatch):
     def curriculum(session, input, mode, source_ids):
         return {"title": input, "description": "A fixture curriculum", "nodes": [
             {"title": "Foundations", "description": "Start here", "parent_index": None},
-            {"title": "Sequences", "description": "Lists and tuples", "parent_index": 0},
-            {"title": "Mappings", "description": "Dictionaries", "parent_index": 0},
+            {"title": "Sequences", "description": "Lists and tuples", "parent_index": None},
+            {"title": "Mappings", "description": "Dictionaries", "parent_index": None},
         ]}
 
     def answer(session, context, prompt):
