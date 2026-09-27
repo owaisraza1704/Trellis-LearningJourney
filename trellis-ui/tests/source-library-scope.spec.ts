@@ -134,6 +134,52 @@ test('Source Library remains global and supports search, paging and explicit sou
   expect(state.locationWrites).toEqual([])
 })
 
+test('Source Library groups sources by journey and keeps unallocated sources separate', async ({
+  page,
+}) => {
+  const state = await mockSources(page)
+  await page.goto('/?screen=sources')
+  const main = page.getByRole('main')
+  const groups = main.getByRole('navigation', { name: 'Source groups' })
+  await expect(groups.getByRole('button', { name: 'All sources' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+  await expect(groups.getByRole('button', { name: 'Computer networks' })).toHaveCount(0)
+  const journeyCards = main.getByRole('region', { name: 'Journey source groups' })
+  await expect(journeyCards.getByRole('button', { name: 'Computer networks' })).toContainText(
+    '1 source',
+  )
+
+  await groups.getByRole('button', { name: 'Unallocated' }).click()
+  await expect(main.locator('article')).toHaveCount(1)
+  await expect(main.getByRole('button', { name: 'Reference 2', exact: true })).toBeVisible()
+  await expect(main.getByRole('navigation', { name: 'Source pages' })).toHaveCount(0)
+
+  await journeyCards.getByRole('button', { name: 'Computer networks' }).click()
+  await expect(journeyCards.getByRole('button', { name: 'Computer networks' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+  await expect(main.locator('article')).toHaveCount(1)
+  await expect(main.getByRole('button', { name: 'Reference 1', exact: true })).toBeVisible()
+  await main.getByRole('button', { name: 'Add source to this journey' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Add source to this journey' })
+  await expect(dialog).toContainText('This source will be attached to Computer networks.')
+  await dialog.getByRole('button', { name: 'Paste text' }).click()
+  await dialog.getByLabel('Source title').fill('Network notes')
+  await dialog.getByLabel('Source text').fill('A network source for this journey.')
+  await dialog.getByRole('button', { name: 'Add source to this journey' }).click()
+  await expect(main.getByRole('button', { name: 'Network notes', exact: true })).toBeVisible()
+  expect(state.submissions.at(-1)?.path_id).toBe('networks')
+
+  await main.getByRole('searchbox', { name: 'Search sources' }).fill('Reference 2')
+  await expect(main.getByText('No sources match your search')).toBeVisible()
+  await groups.getByRole('button', { name: 'Unallocated' }).click()
+  await expect(main.getByRole('button', { name: 'Reference 2', exact: true })).toBeVisible()
+  expect(state.filters.every((filter) => filter === null)).toBe(true)
+})
+
 test('source creation uses the named journey or the global library without moving the study location', async ({
   page,
 }) => {

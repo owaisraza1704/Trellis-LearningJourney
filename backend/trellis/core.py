@@ -5,7 +5,7 @@ import time
 from queue import Queue
 from typing import Callable, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field as InputField, model_validator
 from sqlalchemy import delete, func, update
@@ -758,8 +758,15 @@ def set_location(body: LocationInput, session: Session = Depends(get_session)):
 
 
 @router.get("/history")
-def history(session: Session = Depends(get_session)):
-    return session.exec(select(Activity).order_by(Activity.created_at.desc()).limit(300)).all()
+def history(
+    limit: int = Query(300, ge=1, le=300),
+    offset: int = Query(0, ge=0),
+    session: Session = Depends(get_session),
+):
+    return session.exec(
+        select(Activity).order_by(Activity.created_at.desc(), Activity.id.desc())
+        .offset(offset).limit(limit)
+    ).all()
 
 
 @router.get("/learning-sessions")

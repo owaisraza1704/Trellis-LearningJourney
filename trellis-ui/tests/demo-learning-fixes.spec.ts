@@ -380,6 +380,44 @@ test('history opens the exact saved note or answer and labels earlier resumable 
   await expect(page.getByRole('heading', { name: 'Cache consistency', exact: true })).toBeVisible()
 })
 
+test('history pages through activity older than the first screen', async ({ page }) => {
+  await mockLearning(page)
+  const activities = Array.from({ length: 25 }, (_, index) => ({
+    id: `activity-${index + 1}`,
+    kind: 'interaction',
+    label: `Activity ${index + 1}`,
+    path_id: path.id,
+    node_id: 'cache',
+    created_at: created,
+  }))
+  const offsets: number[] = []
+  await page.route('**/api/history?*', (route) => {
+    const url = new URL(route.request().url())
+    const offset = Number(url.searchParams.get('offset'))
+    const limit = Number(url.searchParams.get('limit'))
+    offsets.push(offset)
+    return route.fulfill({ json: activities.slice(offset, offset + limit) })
+  })
+  await page.goto('/?screen=history')
+  const main = page.getByRole('main')
+  const pages = main.getByRole('navigation', { name: 'History pages' })
+  await expect(main.getByRole('button', { name: /^Activity / })).toHaveCount(12)
+  await expect(main.getByRole('button', { name: /^Activity 1\b/ })).toBeVisible()
+  await expect(pages.getByRole('button', { name: 'Previous' })).toBeDisabled()
+
+  await pages.getByRole('button', { name: 'Next' }).click()
+  await expect(pages).toContainText('Page 2')
+  await expect(main.getByRole('button', { name: /^Activity 13\b/ })).toBeVisible()
+  await expect(main.getByRole('button', { name: /^Activity / })).toHaveCount(12)
+
+  await pages.getByRole('button', { name: 'Next' }).click()
+  await expect(pages).toContainText('Page 3')
+  await expect(main.getByRole('button', { name: /^Activity 25\b/ })).toBeVisible()
+  await expect(main.getByRole('button', { name: /^Activity / })).toHaveCount(1)
+  await expect(pages.getByRole('button', { name: 'Next' })).toBeDisabled()
+  expect(offsets).toEqual([0, 12, 24])
+})
+
 test('finishing the last topic returns to earlier unfinished topics', async ({ page }) => {
   const state = await mockLearning(page)
   state.detail.node.status = 'completed'

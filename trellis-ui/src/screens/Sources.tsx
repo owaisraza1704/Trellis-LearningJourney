@@ -145,6 +145,7 @@ export default function Sources({ pathId }: { pathId?: string }) {
   const [selected, setSelected] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
+  const [group, setGroup] = useState('all')
   const workspace = useQuery({
     queryKey: ['workspace'],
     queryFn: () => api<Workspace>('/workspace'),
@@ -170,9 +171,31 @@ export default function Sources({ pathId }: { pathId?: string }) {
   })
   const journeyNames = new Map(workspace.data?.paths.map((path) => [path.id, path.title]))
   const journeyTitle = pathId ? journeyNames.get(pathId) : undefined
-  const addLabel = pathId ? 'Add source to this journey' : 'Add to library'
+  const selectedJourneyId = !pathId && journeyNames.has(group) ? group : undefined
+  const addPathId = pathId || selectedJourneyId
+  const addLabel = addPathId ? 'Add source to this journey' : 'Add to library'
+  const allSources = sources.data || []
+  const groups = [
+    { id: 'all', label: 'All sources', count: allSources.length },
+    {
+      id: 'unallocated',
+      label: 'Unallocated',
+      count: allSources.filter((source) => !source.path_id).length,
+    },
+  ]
+  const journeyGroups = (workspace.data?.paths || []).map((path) => ({
+    id: path.id,
+    label: path.title,
+    count: allSources.filter((source) => source.path_id === path.id).length,
+  }))
+  const groupedSources =
+    !pathId && group !== 'all'
+      ? allSources.filter((source) =>
+          group === 'unallocated' ? !source.path_id : source.path_id === group,
+        )
+      : allSources
   const query = search.trim().toLocaleLowerCase()
-  const matchingSources = (sources.data || []).filter((source) =>
+  const matchingSources = groupedSources.filter((source) =>
     [source.title, source.url, source.path_id && journeyNames.get(source.path_id)]
       .filter(Boolean)
       .join(' ')
@@ -204,6 +227,61 @@ export default function Sources({ pathId }: { pathId?: string }) {
           <Plus size={15} /> {addLabel}
         </button>
       </div>
+      {!pathId && sources.data && (
+        <nav aria-label="Source groups" className="mb-5 flex gap-1 border-b border-[#E3E0D8]">
+          {groups.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              aria-label={item.label}
+              aria-pressed={group === item.id}
+              className={`flex shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-4 py-3 text-sm transition-colors ${
+                group === item.id
+                  ? 'border-[#5B7A58] font-medium text-[#425E40]'
+                  : 'border-transparent text-[#7A7870] hover:text-[#2D2C28]'
+              }`}
+              onClick={() => {
+                setGroup(item.id)
+                setPage(1)
+              }}
+            >
+              {item.label}
+              <span aria-hidden="true" className="text-xs text-[#A8A5A0]">
+                {item.count}
+              </span>
+            </button>
+          ))}
+        </nav>
+      )}
+      {!pathId && journeyGroups.length > 0 && (
+        <section aria-label="Journey source groups" className="mb-6">
+          <h2 className="mb-3 text-xs uppercase tracking-widest text-[#A8A5A0]">Journeys</h2>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {journeyGroups.map((journey) => (
+              <button
+                key={journey.id}
+                type="button"
+                aria-label={journey.label}
+                aria-pressed={group === journey.id}
+                className={`rounded-xl border p-4 text-left transition-colors ${
+                  group === journey.id
+                    ? 'border-[#5B7A58] bg-[#EFF4EE]'
+                    : 'border-[#E3E0D8] bg-white hover:border-[#B8B5AD]'
+                }`}
+                onClick={() => {
+                  setGroup(journey.id)
+                  setPage(1)
+                }}
+              >
+                <span className="block text-sm font-medium text-[#2D2C28]">{journey.label}</span>
+                <span className="mt-2 block text-xs text-[#7A7870]">
+                  {journey.count} {journey.count === 1 ? 'source' : 'sources'}
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div className="relative w-full max-w-md">
           <Search size={16} className="absolute left-3 top-3 text-[#A8A5A0]" />
@@ -235,7 +313,14 @@ export default function Sources({ pathId }: { pathId?: string }) {
           </p>
         </Empty>
       )}
-      {!!sources.data?.length && matchingSources.length === 0 && (
+      {!!sources.data?.length && groupedSources.length === 0 && (
+        <Empty
+          title={group === 'unallocated' ? 'No unallocated sources' : 'No sources in this journey'}
+        >
+          <p>Add a source here, or choose another group.</p>
+        </Empty>
+      )}
+      {groupedSources.length > 0 && matchingSources.length === 0 && (
         <Empty title="No sources match your search">
           <p>Try a different title, URL or journey name.</p>
         </Empty>
@@ -338,11 +423,11 @@ export default function Sources({ pathId }: { pathId?: string }) {
       {adding && (
         <Modal title={addLabel} onClose={() => setAdding(false)}>
           <p className="mb-4 text-sm text-[#7A7870]">
-            {pathId
-              ? `This source will be attached to ${journeyTitle || 'this journey'}.`
+            {addPathId
+              ? `This source will be attached to ${journeyNames.get(addPathId) || 'this journey'}.`
               : 'This source will be saved in your library. Choose it when creating a journey.'}
           </p>
-          <SourceForm pathId={pathId} submitLabel={addLabel} onDone={() => setAdding(false)} />
+          <SourceForm pathId={addPathId} submitLabel={addLabel} onDone={() => setAdding(false)} />
         </Modal>
       )}
       {selected && <SourcePreview sourceId={selected} onClose={() => setSelected(null)} />}

@@ -1,3 +1,4 @@
+import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Clock } from 'lucide-react'
 import { api, date, type Activity, type Navigate } from '../lib/api'
@@ -17,9 +18,13 @@ interface LearningSession {
 }
 export default function History({ onNavigate }: { onNavigate: Navigate }) {
   const client = useQueryClient()
+  const [page, setPage] = useState(1)
+  const activityStart = useRef<HTMLDivElement>(null)
+  const pageSize = 12
   const history = useQuery({
-    queryKey: ['history'],
-    queryFn: () => api<Activity[]>('/history'),
+    queryKey: ['history', page],
+    queryFn: () =>
+      api<Activity[]>(`/history?limit=${pageSize + 1}&offset=${(page - 1) * pageSize}`),
   })
   const sessions = useQuery({
     queryKey: ['learning-sessions'],
@@ -33,6 +38,11 @@ export default function History({ onNavigate }: { onNavigate: Navigate }) {
     },
   })
   const active = sessions.data?.find((session) => !session.ended_at)
+  const hasNextPage = (history.data?.length || 0) > pageSize
+  const changePage = (nextPage: number) => {
+    setPage(nextPage)
+    activityStart.current?.scrollIntoView({ block: 'start' })
+  }
   return (
     <div className="screen-enter mx-auto max-w-3xl">
       <div className="mb-7">
@@ -70,6 +80,7 @@ export default function History({ onNavigate }: { onNavigate: Navigate }) {
           </div>
         </div>
       )}
+      <div ref={activityStart} />
       {history.isPending ? (
         <Loading />
       ) : history.data?.length === 0 ? (
@@ -78,7 +89,7 @@ export default function History({ onNavigate }: { onNavigate: Navigate }) {
         </Empty>
       ) : (
         <div className="space-y-3">
-          {history.data?.map((item) => (
+          {history.data?.slice(0, pageSize).map((item) => (
             <button
               key={item.id}
               className="flex w-full items-center gap-4 rounded-xl border border-[#E3E0D8] bg-white p-4 text-left hover:border-[#B8B5AD]"
@@ -102,6 +113,25 @@ export default function History({ onNavigate }: { onNavigate: Navigate }) {
             </button>
           ))}
         </div>
+      )}
+      {(page > 1 || hasNextPage) && (
+        <nav aria-label="History pages" className="mt-6 flex items-center justify-between gap-3">
+          <button
+            className="btn-secondary"
+            disabled={page === 1}
+            onClick={() => changePage(page - 1)}
+          >
+            Previous
+          </button>
+          <p className="text-sm text-[#7A7870]">Page {page}</p>
+          <button
+            className="btn-secondary"
+            disabled={!hasNextPage}
+            onClick={() => changePage(page + 1)}
+          >
+            Next
+          </button>
+        </nav>
       )}
       {!!sessions.data?.length && (
         <section className="mt-8">

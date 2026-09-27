@@ -4,6 +4,23 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 import sqlalchemy as sa
 
+from trellis.models import Activity
+
+
+def test_history_pages_reach_older_activity(client, session):
+    session.add_all(Activity(kind='test', label=f'Event {index}') for index in range(25))
+    session.commit()
+
+    all_events = client.get('/api/history').json()
+    first = client.get('/api/history?limit=13&offset=0').json()
+    second = client.get('/api/history?limit=13&offset=12').json()
+    third = client.get('/api/history?limit=13&offset=24').json()
+
+    assert len(all_events) == 25
+    assert first == all_events[:13]
+    assert second == all_events[12:25]
+    assert third == all_events[24:]
+
 
 def test_history_keeps_exact_response_note_and_session_context(client, stub_ai):
     path = client.post('/api/paths', json={'input': 'History destinations'}).json()
