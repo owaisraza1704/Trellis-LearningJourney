@@ -186,12 +186,12 @@ test('follow-up buttons use the selected answer rather than the node topic', asy
   await page.goto(`/?screen=node&path=${journey.id}&node=${node.id}`)
   await expect(page.getByRole('button', { name: 'Compare ideas' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Apply it' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Explain simply' })).toHaveCount(0)
 
   for (const [index, label, action] of [
     [0, 'Show example', 'example'],
     [1, 'Go deeper', 'deeper'],
-    [2, 'Explain simply', 'simplify'],
-    [3, 'Key takeaways', 'recap'],
+    [2, 'Key takeaways', 'recap'],
   ] as const) {
     await page.getByRole('button', { name: label, exact: true }).click()
     await expect.poll(() => state.questions.length).toBe(index + 1)

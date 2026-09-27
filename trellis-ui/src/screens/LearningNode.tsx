@@ -587,11 +587,6 @@ function NodeWorkspace({
                     text: `Go deeper into the answer to: ${active.prompt.slice(0, 160)}`,
                   },
                   {
-                    action: 'simplify',
-                    label: 'Explain simply',
-                    text: `Explain the answer to this more simply: ${active.prompt.slice(0, 160)}`,
-                  },
-                  {
                     action: 'recap',
                     label: 'Key takeaways',
                     text: `Summarize the key takeaways from the answer to: ${active.prompt.slice(0, 160)}`,
