@@ -10,6 +10,7 @@ import {
   Plus,
   RotateCcw,
   Send,
+  Trash2,
 } from 'lucide-react'
 import {
   api,
@@ -103,6 +104,7 @@ function NodeWorkspace({
   }, [readingKey, selected])
   const [threadTitle, setThreadTitle] = useState('')
   const [creatingThread, setCreatingThread] = useState(false)
+  const [confirmClearChat, setConfirmClearChat] = useState(false)
   const [savePayload, setSavePayload] = useState<{
     interaction_id?: string
     evidence_id?: string
@@ -191,6 +193,21 @@ function NodeWorkspace({
       client.invalidateQueries({ queryKey: ['history'] })
       client.invalidateQueries({ queryKey: ['workspace'] })
       client.invalidateQueries({ queryKey: ['sources'] })
+    },
+  })
+  const clearChat = useMutation({
+    mutationFn: () => api<void>(`/nodes/${nodeId}/interactions`, 'DELETE'),
+    onSuccess: () => {
+      setConfirmClearChat(false)
+      setSelected(null)
+      localStorage.removeItem(readingKey)
+      client.setQueryData<NodeDetail>(['node', nodeId], (current) =>
+        current ? { ...current, interactions: [] } : current,
+      )
+      client.invalidateQueries({ queryKey: ['node', nodeId] })
+      client.invalidateQueries({ queryKey: ['notebook'] })
+      client.invalidateQueries({ queryKey: ['history'] })
+      client.invalidateQueries({ queryKey: ['workspace'] })
     },
   })
   const update = useMutation({
@@ -706,7 +723,24 @@ function NodeWorkspace({
             {rightPanel === 'ai' && (
               <div className="flex min-h-[400px] min-w-0 flex-1 flex-col overflow-hidden p-4 xl:min-h-0">
                 <div className="mb-4 rounded-lg border border-[#E3E0D8] bg-[#F0EEE9] p-3">
-                  <p className="text-[10px] uppercase tracking-widest text-[#A8A5A0]">AI Context</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[10px] uppercase tracking-widest text-[#A8A5A0]">
+                      AI Context
+                    </p>
+                    {!threadId && interactions.length > 0 && (
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 text-[10px] text-[#A8554E] hover:underline"
+                        disabled={send.isPending}
+                        onClick={() => {
+                          clearChat.reset()
+                          setConfirmClearChat(true)
+                        }}
+                      >
+                        <Trash2 size={12} /> Clear chat
+                      </button>
+                    )}
+                  </div>
                   <p className="mt-1 text-xs font-medium text-[#4A5FA5]">{title}</p>
                   <p className="mt-1 text-[10px] text-[#7A7870]">
                     {threadId
@@ -927,6 +961,34 @@ function NodeWorkspace({
               {createThread.isPending ? 'Creating…' : 'Create thread'}
             </button>
           </form>
+        </Modal>
+      )}
+      {confirmClearChat && (
+        <Modal title="Clear node chat?" onClose={() => setConfirmClearChat(false)}>
+          <p className="text-sm leading-relaxed text-[#5A5850]">
+            This permanently removes the {interactions.length} questions and answers in this
+            node’s main chat. Exploratory threads, saved notebook copies, progress, and sources
+            remain.
+          </p>
+          <ErrorNotice error={clearChat.error} />
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={clearChat.isPending}
+              onClick={() => setConfirmClearChat(false)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="rounded-lg bg-[#A8554E] px-4 py-2 text-sm text-white"
+              disabled={clearChat.isPending}
+              onClick={() => clearChat.mutate()}
+            >
+              {clearChat.isPending ? 'Clearing…' : 'Clear chat'}
+            </button>
+          </div>
         </Modal>
       )}
       {savePayload && (

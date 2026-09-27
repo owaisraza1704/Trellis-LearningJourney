@@ -631,6 +631,38 @@ def node_interaction(
     return interact(session, require(session, Node, node_id), body)
 
 
+@router.delete("/nodes/{node_id}/interactions", status_code=204)
+def clear_node_chat(node_id: str, session: Session = Depends(get_session)):
+    node = require(session, Node, node_id)
+    interaction_ids = session.exec(
+        select(Interaction.id).where(
+            Interaction.node_id == node_id, Interaction.thread_id.is_(None),
+        )
+    ).all()
+    if not interaction_ids:
+        return
+
+    for item in session.exec(
+        select(NotebookItem).where(NotebookItem.interaction_id.in_(interaction_ids))
+    ).all():
+        item.interaction_id = None
+        item.origin = {key: value for key, value in item.origin.items() if key != "interaction_id"}
+        session.add(item)
+
+    session.exec(
+        delete(Activity).where(
+            Activity.kind == "interaction", Activity.interaction_id.in_(interaction_ids),
+        )
+    )
+    session.exec(
+        update(Activity).where(Activity.interaction_id.in_(interaction_ids))
+        .values(interaction_id=None)
+    )
+    session.exec(delete(Interaction).where(Interaction.id.in_(interaction_ids)))
+    activity(session, "node_chat_cleared", f"Cleared chat for {node.title}", node=node)
+    session.commit()
+
+
 @router.post("/nodes/{node_id}/threads", status_code=201)
 def create_thread(node_id: str, body: ThreadInput, session: Session = Depends(get_session)):
     node = require(session, Node, node_id)

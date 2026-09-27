@@ -56,6 +56,7 @@ async function mockJourney(page: Page, interactions = [generalAnswer]) {
       { id: 'working-notes', path_id: journey.id, title: 'Working notes', position: 0, items: [] },
     ] as NotebookPage[],
     saves: [] as Array<Record<string, unknown>>,
+    clears: 0,
   }
   await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url())
@@ -74,6 +75,11 @@ async function mockJourney(page: Page, interactions = [generalAnswer]) {
         json: { path: journey, node, nodes: [node], threads: [], interactions: state.interactions },
       })
     if (url.pathname === `/api/nodes/${node.id}/interactions`) {
+      if (route.request().method() === 'DELETE') {
+        state.clears += 1
+        state.interactions.splice(0)
+        return route.fulfill({ status: 204, body: '' })
+      }
       const body = route.request().postDataJSON()
       state.questions.push(body)
       const answer: Interaction = {
@@ -127,6 +133,35 @@ async function mockJourney(page: Page, interactions = [generalAnswer]) {
   })
   return state
 }
+
+test('clearing a node chat requires confirmation and leaves the lesson ready to restart', async ({
+  page,
+}) => {
+  const state = await mockJourney(page)
+  await page.goto(`/?screen=node&path=${journey.id}&node=${node.id}`)
+  const lesson = page.getByRole('region', { name: 'Lesson', exact: true })
+  await expect(lesson).toContainText('Queries per second')
+
+  await page.getByRole('button', { name: 'Clear chat' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Clear node chat?' })
+  await expect(dialog).toContainText(
+    'Exploratory threads, saved notebook copies, progress, and sources remain',
+  )
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
+  expect(state.clears).toBe(0)
+  await expect(lesson).toContainText('Queries per second')
+
+  await page.getByRole('button', { name: 'Clear chat' }).click()
+  await dialog.getByRole('button', { name: 'Clear chat' }).click()
+  await expect.poll(() => state.clears).toBe(1)
+  await expect(dialog).toHaveCount(0)
+  await expect(lesson).toContainText('Build your understanding')
+  await expect(page.getByRole('button', { name: 'Read response to Explain QPS' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Clear chat' })).toHaveCount(0)
+
+  await page.reload()
+  await expect(lesson).toContainText('Build your understanding')
+})
 
 test('general AI answers are visibly unverified in the lesson, preview and evidence panel', async ({
   page,
