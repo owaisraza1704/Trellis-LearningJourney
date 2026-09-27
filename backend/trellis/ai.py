@@ -814,7 +814,8 @@ def answer(
     context = {
         **context,
         "active_topic": (
-            context.get("focus_interaction", {}).get("prompt")
+            context.get("focus_interaction", {}).get("resolved_question")
+            or context.get("focus_interaction", {}).get("prompt")
             or context.get("thread_title") or context.get("node_title", "")
         ),
         "scope": "thread" if context.get("thread_title") else "node",

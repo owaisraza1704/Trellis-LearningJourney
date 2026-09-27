@@ -163,6 +163,7 @@ def build_context(
     if focus:
         context["focus_interaction"] = {
             "prompt": focus.prompt, "content": focus.content, "status": focus.status,
+            "resolved_question": focus.evaluation.get("resolved_question") or focus.prompt,
         }
     return context
 
@@ -542,7 +543,8 @@ def interact(
         progress("saving")
     interaction = Interaction(path_id=node.path_id, node_id=node.id,
                               thread_id=thread.id if thread else None, prompt=body.prompt,
-                              action=body.action, **result)
+                              action=body.action,
+                              reply_to_interaction_id=focus.id if focus else None, **result)
     session.add(interaction)
     session.flush()
     # Thread conversations never mutate primary-node progress or location.

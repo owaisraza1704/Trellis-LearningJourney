@@ -128,12 +128,14 @@ def test_node_followup_keeps_its_topic_when_no_thread_is_active(monkeypatch):
 
 def test_selected_answer_sets_the_topic_for_retrieval_draft_and_review(monkeypatch):
     selected_prompt = "Are there other model training methods?"
+    selected_question = "How do supervised fine-tuning and RLHF teach a model?"
     context = {
         "path_id": "journey", "node_title": "Fine-Tuning",
         "history": [{"prompt": selected_prompt, "content": "Methods include SFT and RLHF."}],
         "focus_interaction": {
             "prompt": selected_prompt, "content": "Methods include SFT and RLHF.",
             "status": "answered",
+            "resolved_question": selected_question,
         },
         "answer_action": "simplify",
     }
@@ -155,7 +157,7 @@ def test_selected_answer_sets_the_topic_for_retrieval_draft_and_review(monkeypat
                 question=resolved, search_query=search_query, sources_only=False,
             )
         assert request["question"] == resolved
-        assert request["context"]["active_topic"] == selected_prompt
+        assert request["context"]["active_topic"] == selected_question
         if schema is ai.DraftAnswer:
             return ai.DraftAnswer(status="answered", reason="", blocks=[
                 ai.AnswerBlock(text=passage["excerpt"], evidence_ids=[passage["id"]]),
@@ -174,7 +176,7 @@ def test_selected_answer_sets_the_topic_for_retrieval_draft_and_review(monkeypat
     result = ai.answer(None, context, "Explain the selected answer simply")
 
     assert result["status"] == "answered"
-    assert result["evaluation"]["active_topic"] == selected_prompt
+    assert result["evaluation"]["active_topic"] == selected_question
     assert retrievals == [(search_query, {"path_id": "journey"})]
     assert [schema for schema, _ in requests] == [
         ai.ResolvedQuestion, ai.DraftAnswer, ai.AnswerEvaluation,

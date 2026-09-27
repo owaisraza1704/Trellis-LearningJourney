@@ -118,6 +118,10 @@ function NodeWorkspace({
   const interactions = threadId ? thread.data?.interactions || [] : node.data?.interactions || []
   const active =
     interactions.find((item) => item.id === selected) || interactions[interactions.length - 1]
+  const followUpTopic =
+    typeof active?.evaluation.resolved_question === 'string'
+      ? active.evaluation.resolved_question
+      : active?.prompt || ''
   const send = useMutation({
     mutationFn: ({
       text,
@@ -466,9 +470,15 @@ function NodeWorkspace({
                           disabled={send.isPending || closed}
                           onClick={() =>
                             send.mutate({
-                              text: active.prompt,
+                              text:
+                                !active.reply_to_interaction_id &&
+                                ['example', 'deeper', 'recap'].includes(active.action) &&
+                                typeof active.evaluation.resolved_question === 'string'
+                                  ? active.evaluation.resolved_question
+                                  : active.prompt,
                               action: active.action,
                               sourcesOnly,
+                              replyToInteractionId: active.reply_to_interaction_id || undefined,
                             })
                           }
                         >
@@ -579,17 +589,17 @@ function NodeWorkspace({
                   {
                     action: 'example',
                     label: 'Show example',
-                    text: `Show an example for the answer to: ${active.prompt.slice(0, 160)}`,
+                    text: `Show an example for the answer to: ${followUpTopic.slice(0, 160)}`,
                   },
                   {
                     action: 'deeper',
                     label: 'Go deeper',
-                    text: `Go deeper into the answer to: ${active.prompt.slice(0, 160)}`,
+                    text: `Go deeper into the answer to: ${followUpTopic.slice(0, 160)}`,
                   },
                   {
                     action: 'recap',
                     label: 'Key takeaways',
-                    text: `Summarize the key takeaways from the answer to: ${active.prompt.slice(0, 160)}`,
+                    text: `Summarize the key takeaways from the answer to: ${followUpTopic.slice(0, 160)}`,
                   },
                 ].map((item) => (
                   <button

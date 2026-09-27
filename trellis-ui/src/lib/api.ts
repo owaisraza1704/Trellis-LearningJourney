@@ -155,6 +155,7 @@ export interface Interaction {
   path_id: string
   node_id: string
   thread_id: string | null
+  reply_to_interaction_id?: string | null
   prompt: string
   content: string
   action: string

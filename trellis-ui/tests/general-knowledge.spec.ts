@@ -81,6 +81,7 @@ async function mockJourney(page: Page, interactions = [generalAnswer]) {
         id: `response-${state.questions.length}`,
         prompt: body.prompt,
         action: body.action,
+        reply_to_interaction_id: body.reply_to_interaction_id || null,
         status: body.sources_only ? 'abstained' : 'unverified',
         evaluation: {
           ...generalAnswer.evaluation,
@@ -204,6 +205,50 @@ test('follow-up buttons use the selected answer rather than the node topic', asy
     ).toBeVisible()
     await page.getByRole('button', { name: `Read response to ${generalAnswer.prompt}` }).click()
   }
+})
+
+test('follow-up buttons target the answer currently open in the lesson', async ({ page }) => {
+  const laterAnswer: Interaction = {
+    ...generalAnswer,
+    id: 'later-answer',
+    prompt: 'Go deeper into the answer to: Explain QPS',
+    content: 'A cache miss can increase request latency while the database loads the item.',
+    evaluation: {
+      ...generalAnswer.evaluation,
+      resolved_question: 'How does a cache miss affect request latency?',
+    },
+  }
+  const state = await mockJourney(page, [generalAnswer, laterAnswer])
+  await page.goto(`/?screen=node&path=${journey.id}&node=${node.id}`)
+  for (const [index, label] of ['Show example', 'Go deeper', 'Key takeaways'].entries()) {
+    await page.getByRole('button', { name: `Read response to ${laterAnswer.prompt}` }).click()
+    await expect(page.getByRole('heading', { name: laterAnswer.prompt, exact: true })).toBeVisible()
+    await page.getByRole('button', { name: label, exact: true }).click()
+    await expect.poll(() => state.questions.length).toBe(index + 1)
+    expect(state.questions[index].reply_to_interaction_id).toBe(laterAnswer.id)
+    expect(state.questions[index].prompt).toContain(laterAnswer.evaluation.resolved_question)
+    expect(state.questions[index].prompt).not.toContain(generalAnswer.prompt)
+  }
+})
+
+test('retrying a failed follow-up keeps its selected answer', async ({ page }) => {
+  const failedFollowUp: Interaction = {
+    ...generalAnswer,
+    id: 'failed-follow-up',
+    prompt: 'Go deeper into the answer to: Explain QPS',
+    action: 'deeper',
+    status: 'abstained',
+    reply_to_interaction_id: generalAnswer.id,
+    content: 'No answer shown.',
+  }
+  const state = await mockJourney(page, [generalAnswer, failedFollowUp])
+  await page.goto(`/?screen=node&path=${journey.id}&node=${node.id}`)
+
+  await page.getByRole('button', { name: 'Try again', exact: true }).click()
+
+  await expect.poll(() => state.questions.length).toBe(1)
+  expect(state.questions[0].reply_to_interaction_id).toBe(generalAnswer.id)
+  expect(state.questions[0].prompt).toBe(failedFollowUp.prompt)
 })
 
 test('Sources only is optional and applies to questions and quick actions', async ({ page }) => {

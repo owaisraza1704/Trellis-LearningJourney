@@ -70,8 +70,38 @@ def test_followup_uses_the_selected_answer_and_only_its_earlier_history(client, 
     ]
     assert context["focus_interaction"] == {
         "prompt": selected["prompt"], "content": selected["content"], "status": "answered",
+        "resolved_question": selected["prompt"],
     }
     assert context["answer_action"] == "deeper"
+    assert response.json()["reply_to_interaction_id"] == selected["id"]
+
+
+def test_followup_of_a_followup_uses_the_visible_answer(client, session, stub_ai):
+    path = create_path(client)
+    node_id = path["nodes"][0]["id"]
+    first = client.post(f"/api/nodes/{node_id}/interactions", json={
+        "prompt": "Introduce RAG architectures.",
+    }).json()
+    second = client.post(f"/api/nodes/{node_id}/interactions", json={
+        "prompt": "Go deeper into RAG architectures.", "action": "deeper",
+        "reply_to_interaction_id": first["id"],
+    }).json()
+    saved_second = session.get(Interaction, second["id"])
+    saved_second.evaluation = {"resolved_question": "How does a retriever rank passages?"}
+    session.add(saved_second)
+    session.commit()
+
+    third = client.post(f"/api/nodes/{node_id}/interactions", json={
+        "prompt": "Go deeper into the answer to: How does a retriever rank passages?",
+        "action": "deeper", "reply_to_interaction_id": second["id"],
+    })
+
+    assert third.status_code == 201
+    assert third.json()["reply_to_interaction_id"] == second["id"]
+    assert stub_ai[-1]["focus_interaction"] == {
+        "prompt": second["prompt"], "content": second["content"], "status": "answered",
+        "resolved_question": "How does a retriever rank passages?",
+    }
 
 
 def test_followup_cannot_target_another_conversation_or_withheld_answer(client, session, stub_ai):
