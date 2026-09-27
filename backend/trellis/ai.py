@@ -179,6 +179,9 @@ DETAILED_REQUEST = re.compile(
     r"\b(?:in detail|detailed|thorough(?:ly)?|comprehensive|step[- ]by[- ]step|deep dive)\b",
     re.IGNORECASE,
 )
+SOURCE_ID_MARKER = re.compile(
+    r"[ \t]*\[([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})\]", re.IGNORECASE,
+)
 
 
 def passes_grounding(evaluation: Evaluation) -> bool:
@@ -999,6 +1002,13 @@ def answer(
             return withhold("insufficient_evidence", draft.reason)
         if any(not block.evidence_ids or not set(block.evidence_ids) <= known_ids for block in draft.blocks):
             return withhold("invalid_citations", "The draft included missing or unknown source references.")
+        for block in draft.blocks:
+            raw_ids = {source_id.lower() for source_id in SOURCE_ID_MARKER.findall(block.text)}
+            if not raw_ids <= {source_id.lower() for source_id in block.evidence_ids}:
+                return withhold("invalid_citations", "The draft included an unknown source reference.")
+            block.text = SOURCE_ID_MARKER.sub("", block.text).rstrip()
+            if not block.text:
+                return withhold("invalid_citations", "The draft contained only source references.")
         try:
             report("checking")
             evaluation = structured_completion(provider, model, AnswerEvaluation, [

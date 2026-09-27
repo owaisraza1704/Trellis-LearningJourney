@@ -89,6 +89,38 @@ def test_supported_answer_records_exact_citations_and_evaluation(monkeypatch, su
     assert answer["evaluation"]["evaluated_at"]
 
 
+def test_model_written_source_id_is_replaced_by_numbered_citation(monkeypatch, supported_answer):
+    source_id = "09292f47-71fd-4767-8aeb-f4ddd459e5c6"
+    monkeypatch.setattr(evidence, "retrieve_evidence", lambda *args, **kwargs: {
+        "evidence": [{**EVIDENCE, "id": source_id}], "warnings": [], "web_search_performed": False,
+    })
+    supported_answer.blocks[0].text = f"Use `def` to define a function. [{source_id}]"
+    supported_answer.blocks[0].evidence_ids = [source_id]
+    results = iter([
+        supported_answer,
+        ai.AnswerEvaluation(relevance=1, completeness=1, consistency=1, grounding=1,
+                            supported=True, explanation="The cited excerpt supports the claim."),
+    ])
+    monkeypatch.setattr(ai, "structured_completion", lambda *args: next(results))
+
+    result = ai.answer(None, CONTEXT, "How are functions defined?")
+
+    assert result["status"] == "answered"
+    assert result["content"] == "Use `def` to define a function.\n\n[1]"
+
+
+def test_unknown_model_written_source_id_is_withheld(monkeypatch, supported_answer):
+    supported_answer.blocks[0].text = (
+        "Use `def` to define a function. [09292f47-71fd-4767-8aeb-f4ddd459e5c6]"
+    )
+    monkeypatch.setattr(ai, "structured_completion", lambda *args: supported_answer)
+
+    result = ai.answer(None, CONTEXT, "How are functions defined?")
+
+    assert result["evaluation"]["status"] == "invalid_citations"
+    assert "Use `def`" not in result["content"]
+
+
 @pytest.mark.parametrize("action, expected", [
     ("foundation", "220-350 words"),
     ("deeper", "220-350 words"),
