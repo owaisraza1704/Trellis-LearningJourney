@@ -198,7 +198,11 @@ test('follow-up buttons use the selected answer rather than the node topic', asy
     await expect.poll(() => state.questions.length).toBe(index + 1)
     expect(state.questions[index].action).toBe(action)
     expect(state.questions[index].reply_to_interaction_id).toBe(generalAnswer.id)
-    expect(state.questions[index].prompt).toContain(generalAnswer.prompt)
+    if (action === 'deeper') {
+      expect(state.questions[index].prompt).toBe('Go deeper from this answer')
+    } else {
+      expect(state.questions[index].prompt).toContain(generalAnswer.prompt)
+    }
     expect(state.questions[index].prompt).not.toContain(node.title)
     await expect(
       page.getByRole('heading', { name: state.questions[index].prompt, exact: true }),
@@ -232,9 +236,35 @@ test('follow-up buttons target the answer currently open in the lesson', async (
     await page.getByRole('button', { name: label, exact: true }).click()
     await expect.poll(() => state.questions.length).toBe(index + 1)
     expect(state.questions[index].reply_to_interaction_id).toBe(laterAnswer.id)
-    expect(state.questions[index].prompt).toContain(laterAnswer.evaluation.resolved_question)
+    if (label === 'Go deeper') {
+      expect(state.questions[index].prompt).toBe('Go deeper from this answer')
+    } else {
+      expect(state.questions[index].prompt).toContain(laterAnswer.evaluation.resolved_question)
+    }
     expect(state.questions[index].prompt).not.toContain(generalAnswer.prompt)
   }
+})
+
+test('a covered lesson offers the curriculum instead of another deeper click', async ({ page }) => {
+  const completedAnswer: Interaction = {
+    ...generalAnswer,
+    action: 'deeper',
+    evaluation: {
+      ...generalAnswer.evaluation,
+      resolved_question: 'What has this RAG lesson covered, and what should come next?',
+      lesson_complete: true,
+    },
+  }
+  await mockJourney(page, [completedAnswer])
+  await page.goto(`/?screen=node&path=${journey.id}&node=${node.id}`)
+
+  await expect(
+    page.getByRole('heading', { name: 'What we covered and what to study next' }),
+  ).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Go deeper', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Show example', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Continue in curriculum' }).click()
+  await expect(page).toHaveURL(new RegExp('screen=graph'))
 })
 
 test('retrying a failed follow-up keeps its selected answer', async ({ page }) => {
@@ -316,7 +346,7 @@ test('Sources only is optional and applies to questions and quick actions', asyn
   await page.getByRole('button', { name: 'Read response to What is throughput?' }).click()
   await page.getByRole('button', { name: 'Go deeper', exact: true }).click()
   await expect(
-    page.getByRole('heading', { name: 'Go deeper into the answer to: What is throughput?' }),
+    page.getByRole('heading', { name: 'Go deeper from this answer' }),
   ).toBeVisible()
   expect(state.questions[2].sources_only).toBe(true)
   expect(state.questions[2].action).toBe('deeper')

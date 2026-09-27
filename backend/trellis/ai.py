@@ -125,6 +125,7 @@ class ResolvedQuestion(Output):
     question: str = Field(min_length=1, max_length=16000)
     search_query: str = Field(min_length=1, max_length=500)
     sources_only: bool
+    lesson_complete: bool = False
 
 
 class GeneralAnswer(Output):
@@ -146,13 +147,13 @@ ANSWER_GUIDANCE = {
         "or bullets, not a terse definition."
     ),
     "deeper": (
-        "Continue the selected answer rather than writing a new introduction. Use at most one "
-        "short sentence to connect to what the learner already read, then develop the single "
-        "underexplained point named in the resolved question. Teach how it works step by step, "
-        "why it matters, and a concrete example or trade-off when supported. Do not repeat the selected answer's "
-        "definition, stage list, or conclusion just to make this response self-contained. Aim for "
-        "about 220-350 words only when there is enough new evidence; if not, explain what detail "
-        "the available evidence cannot support instead of paraphrasing the previous answer."
+        "Advance the lesson from the selected answer and its reply_chain. Explain the next useful "
+        "facet named in the resolved question, including how or why it matters and an example or "
+        "trade-off when supported. Cover a substantial part of the subject rather than drilling "
+        "into a smaller technical detail just because the last answer mentioned it. Do not repeat "
+        "points already taught in this chain. Aim for about 220-350 words when there is enough "
+        "new evidence; if the main ideas are covered, connect them and identify a useful next "
+        "topic instead of stretching the explanation."
     ),
     "example": (
         "Walk through one concrete example with its setup, steps, outcome, and why it illustrates "
@@ -775,13 +776,26 @@ def resolve_question(provider: str, model: str, context: dict, prompt: str) -> R
             "what was discussed, but is not evidence that its claims are true. Otherwise, use "
             "active_topic and the most recent relevant conversation to resolve short follow-ups "
             "such as 'Explain more', 'Why?', or 'Show an example'. "
-            "If context.answer_action is 'deeper' and focus_interaction exists, choose exactly "
-            "one important process or design choice that answer raised but did not explain how "
-            "or why. Prefer a teachable mechanism over an incidental caveat or anecdote, unless "
-            "the selected answer is mainly about that caveat. "
-            "Return one narrow question about that point. Do not combine several stages or turn "
-            "the answer's outline into a checklist, and do not ask for another overview. Make "
-            "search_query target only the chosen point. "
+            "If context.answer_action is 'deeper' and focus_interaction exists, use reply_chain "
+            "to see what this branch has already taught. Continue the subject of the selected "
+            "answer with the next major facet of the branch's original subject: an important "
+            "missing stage, design choice, trade-off, or application. Review reply_chain to "
+            "avoid already-covered facets. After a specific answer has explained its central "
+            "how and why, move sideways to an untouched major facet of the original subject; "
+            "do not ask for a subtype, internal algorithm, or still narrower mechanism of that "
+            "answer unless the learner explicitly asks for it. A button request such as 'Go "
+            "deeper from this answer' is not an explicit request for the answer's subtypes. "
+            "Avoid repeating covered points or restarting the node overview. A subject can "
+            "always be split into smaller details; those details do not keep the lesson open. "
+            "Once its overview, main ideas or stages, practical choices, and key limitations "
+            "have been taught, set lesson_complete true even if specialized subtopics remain "
+            "and ask for a brief synthesis and a sensible next topic rather than inventing "
+            "another level of detail. For example, a RAG lesson that covered source preparation, "
+            "retrieval, reranking, generation, and evaluation is complete; advanced RAG variants "
+            "belong in a separate question or topic. Otherwise set it false. An explicit new "
+            "question is not "
+            "a request to end the lesson. Make search_query cover the selected next facet or, "
+            "when complete, the subject being synthesized. "
             "In a thread, its "
             "topic and conversation are the focus; the parent node, ancestors, and seed are only "
             "background. Do not replace the thread question with its broader parent topic. "
@@ -814,21 +828,41 @@ def answer(
     context = {
         **context,
         "active_topic": (
-            context.get("focus_interaction", {}).get("resolved_question")
+            (
+                context["reply_chain"][0]["resolved_question"]
+                if context.get("answer_action") == "deeper" and context.get("reply_chain")
+                else None
+            )
+            or context.get("focus_interaction", {}).get("resolved_question")
             or context.get("focus_interaction", {}).get("prompt")
             or context.get("thread_title") or context.get("node_title", "")
         ),
         "scope": "thread" if context.get("thread_title") else "node",
     }
     resolved = resolve_question(provider, model, context, prompt)
+    lesson_complete = bool(
+        resolved.lesson_complete and context.get("answer_action") == "deeper"
+        and context.get("focus_interaction")
+    )
+    context["lesson_complete"] = lesson_complete
     context["sources_only"] = bool(context.get("sources_only") or resolved.sources_only)
     context["response_guidance"] = ANSWER_GUIDANCE.get(
         context.get("answer_action"), ANSWER_GUIDANCE["question"]
     )
-    detailed_answer = context.get("answer_action") in {"foundation", "deeper"} or bool(
-        DETAILED_REQUEST.search(prompt)
+    if lesson_complete:
+        context["response_guidance"] = (
+            "The main ideas in this reply chain have been covered. Briefly connect the key "
+            "ideas without repeating a full lesson, then suggest one useful related topic to "
+            "study next. Keep factual claims grounded in evidence; do not invent more depth."
+        )
+    detailed_answer = not lesson_complete and (
+        context.get("answer_action") in {"foundation", "deeper"}
+        or bool(DETAILED_REQUEST.search(prompt))
     )
-    focused_deeper = context.get("answer_action") == "deeper" and bool(context.get("focus_interaction"))
+    focused_deeper = (
+        context.get("answer_action") == "deeper"
+        and bool(context.get("focus_interaction")) and not lesson_complete
+    )
     if detailed_answer and context.get("answer_action") not in {"foundation", "deeper"}:
         context["response_guidance"] = (
             "The learner explicitly asked for detail. Give a study-ready explanation, usually "
@@ -885,6 +919,7 @@ def answer(
             "web_search_performed": web_search_performed, "web_search_query": web_search_query,
             "partial_answer_preserved": verified_partial is not None and draft is verified_partial[0],
             "resolved_question": question, "active_topic": context["active_topic"],
+            "lesson_complete": lesson_complete,
             "sources_only": context["sources_only"],
         }
         used = {reference for block in draft.blocks for reference in block.evidence_ids}
@@ -913,6 +948,7 @@ def answer(
             expansion_attempted=expansion_attempted,
             web_search_performed=web_search_performed, web_search_query=web_search_query,
             resolved_question=question, active_topic=context["active_topic"],
+            lesson_complete=lesson_complete,
             sources_only=context["sources_only"],
             method="model_and_citation_checks" if checks or status == "evaluation_failed" else "deterministic_gate",
         )
@@ -937,8 +973,8 @@ def answer(
                     "label this as unverified general AI knowledge. State uncertainty and avoid "
                     "speculation or precise claims you cannot responsibly make. Follow "
                     "context.response_guidance and give a focused explanation rather than a terse "
-                    "definition; for a deeper follow-up, continue the selected point with its "
-                    "mechanism and a useful example or trade-off rather than repeating the prior "
+                    "definition; for a deeper follow-up, advance the selected discussion to "
+                    "the next useful facet without repeating or endlessly narrowing the prior "
                     "answer. Do not pad or repeat points. Examples may be "
                     "clearly described as illustrative. Do not include citations, source links, "
                     "bibliographies, or claims that you searched or verified facts. Do not claim "
@@ -975,6 +1011,7 @@ def answer(
                 "retrieval_warnings": result["warnings"],
                 "web_search_performed": web_search_performed, "web_search_query": web_search_query,
                 "resolved_question": question, "active_topic": context["active_topic"],
+                "lesson_complete": lesson_complete,
                 "sources_only": False, "evaluated_at": datetime.now(timezone.utc).isoformat(),
                 "correction_attempted": correction_attempted, "checks": checks,
                 "expansion_attempted": expansion_attempted,
@@ -1072,7 +1109,7 @@ def answer(
                     "a deeper explanation when supporting details are available. For a selected "
                     "deeper follow-up, compare the draft with context.focus_interaction.content: "
                     "repeating its definition, stage list, or conclusion without developing the "
-                    "chosen next details is incomplete, even if the draft is long. Do not "
+                    "chosen next facet is incomplete, even if the draft is long. Do not "
                     "award high completeness to a terse introduction that omits useful mechanisms "
                     "or distinctions present in the excerpts. In an "
                     "exploratory thread, parent-node details are background: do not penalize an "

@@ -165,6 +165,19 @@ def build_context(
             "prompt": focus.prompt, "content": focus.content, "status": focus.status,
             "resolved_question": focus.evaluation.get("resolved_question") or focus.prompt,
         }
+        reply_chain = []
+        current = focus
+        while current and len(reply_chain) < 12:
+            reply_chain.append({
+                "prompt": current.prompt,
+                "resolved_question": current.evaluation.get("resolved_question") or current.prompt,
+                "content": current.content if current.status != "abstained" else WITHHELD_ANSWER,
+            })
+            current = (
+                session.get(Interaction, current.reply_to_interaction_id)
+                if current.reply_to_interaction_id else None
+            )
+        context["reply_chain"] = list(reversed(reply_chain))
     return context
 
 

@@ -727,7 +727,7 @@ for (const scenario of [
     const interactions = [answer]
     // Matching the quick-action text also checks that it cannot consume an unsent draft.
     const submitted = scenario.quickAction
-      ? 'Go deeper into the answer to: Explain motion'
+      ? 'Go deeper from this answer'
       : 'How is speed different?'
     let request: { prompt: string; action: string; reply_to_interaction_id?: string } | undefined
     let release!: () => void

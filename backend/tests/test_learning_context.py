@@ -184,6 +184,67 @@ def test_selected_answer_sets_the_topic_for_retrieval_draft_and_review(monkeypat
     assert requests[1][1]["context"] == requests[2][1]["context"]
 
 
+def test_completed_deeper_lesson_synthesizes_without_forcing_another_long_answer(monkeypatch):
+    context = {
+        "path_id": "journey", "node_title": "RAG Architectures", "answer_action": "deeper",
+        "focus_interaction": {
+            "prompt": "How does retrieval work?", "content": "Retrieval finds relevant passages.",
+            "status": "answered", "resolved_question": "How does retrieval work?",
+        },
+        "reply_chain": [
+            {"prompt": "Introduce RAG", "resolved_question": "How does RAG work?",
+             "content": "RAG retrieves passages before generation."},
+            {"prompt": "How does retrieval work?", "resolved_question": "How does retrieval work?",
+             "content": "Retrieval finds relevant passages."},
+        ],
+    }
+    requests = []
+
+    def complete(provider, model, schema, messages):
+        request = json.loads(messages[1]["content"])
+        requests.append((schema, messages[0]["content"], request))
+        if schema is ai.ResolvedQuestion:
+            assert "next major facet" in messages[0]["content"]
+            assert "one narrow question" not in messages[0]["content"]
+            assert request["context"]["reply_chain"] == context["reply_chain"]
+            return ai.ResolvedQuestion(
+                question="What has this RAG lesson covered, and what should come next?",
+                search_query="RAG architecture retrieval generation overview",
+                sources_only=False, lesson_complete=True,
+            )
+        assert request["context"]["active_topic"] == "How does RAG work?"
+        assert request["context"]["lesson_complete"] is True
+        assert "Briefly connect the key ideas" in request["context"]["response_guidance"]
+        if schema is ai.DraftAnswer:
+            return ai.DraftAnswer(status="answered", reason="", blocks=[
+                ai.AnswerBlock(text="RAG retrieves relevant passages before generating an answer. "
+                               "Next, study retrieval quality.", evidence_ids=["rag-passage"]),
+            ])
+        return ai.AnswerEvaluation(
+            relevance=1, completeness=1, consistency=1, grounding=1,
+            supported=True, explanation="The source supports this synthesis.",
+        )
+
+    monkeypatch.setattr(ai, "selected_provider", lambda session: ("azure", "test-model"))
+    monkeypatch.setattr(ai, "structured_completion", complete)
+    monkeypatch.setattr(evidence, "retrieve_evidence", lambda *args, **kwargs: {
+        "evidence": [{
+            **QPS_PASSAGE, "id": "rag-passage", "title": "RAG",
+            "excerpt": "RAG retrieves relevant passages before generating an answer. "
+                       "Retrieval quality affects the result.",
+        }], "warnings": [], "web_search_performed": False,
+    })
+
+    result = ai.answer(None, context, "Go deeper into this answer")
+
+    assert result["status"] == "answered"
+    assert result["evaluation"]["lesson_complete"] is True
+    assert [schema for schema, _, _ in requests] == [
+        ai.ResolvedQuestion, ai.DraftAnswer, ai.AnswerEvaluation,
+    ]
+    assert requests[1][2]["context"] == requests[2][2]["context"]
+
+
 def test_source_constraint_resolved_from_followup_history_prevents_general_fallback(monkeypatch):
     context = {
         "path_id": "journey", "node_title": "Horizontal scaling", "thread_title": "QPS",

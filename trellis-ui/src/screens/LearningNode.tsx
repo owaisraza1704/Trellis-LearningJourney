@@ -43,6 +43,7 @@ const answerStages: Record<string, string> = {
 function answerHeading(interaction: Interaction) {
   const resolved = interaction.evaluation.resolved_question
   if (typeof resolved !== 'string' || !resolved.trim()) return interaction.prompt
+  if (interaction.evaluation.lesson_complete === true) return 'What we covered and what to study next'
   if (interaction.action === 'deeper') return `Go deeper: ${resolved}`
   if (interaction.action === 'example') return `Example: ${resolved}`
   if (interaction.action === 'recap') return `Key takeaways: ${resolved}`
@@ -611,11 +612,13 @@ function NodeWorkspace({
                     label: 'Show example',
                     text: `Show an example for the answer to: ${followUpTopic.slice(0, 160)}`,
                   },
-                  {
-                    action: 'deeper',
-                    label: 'Go deeper',
-                    text: `Go deeper into the answer to: ${followUpTopic.slice(0, 160)}`,
-                  },
+                  ...(active.evaluation.lesson_complete === true
+                    ? []
+                    : [{
+                        action: 'deeper',
+                        label: 'Go deeper',
+                        text: 'Go deeper from this answer',
+                      }]),
                   {
                     action: 'recap',
                     label: 'Key takeaways',
@@ -631,6 +634,14 @@ function NodeWorkspace({
                     {item.label}
                   </button>
                 ))}
+                {active.evaluation.lesson_complete === true && (
+                  <button
+                    className="btn-secondary"
+                    onClick={() => onNavigate('graph', { path_id: path.id })}
+                  >
+                    Continue in curriculum <ArrowRight size={14} />
+                  </button>
+                )}
               </div>
             )}
             {!threadId && (

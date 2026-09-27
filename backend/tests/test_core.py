@@ -72,6 +72,7 @@ def test_followup_uses_the_selected_answer_and_only_its_earlier_history(client, 
         "prompt": selected["prompt"], "content": selected["content"], "status": "answered",
         "resolved_question": selected["prompt"],
     }
+    assert [item["prompt"] for item in context["reply_chain"]] == [selected["prompt"]]
     assert context["answer_action"] == "deeper"
     assert response.json()["reply_to_interaction_id"] == selected["id"]
 
@@ -102,6 +103,12 @@ def test_followup_of_a_followup_uses_the_visible_answer(client, session, stub_ai
         "prompt": second["prompt"], "content": second["content"], "status": "answered",
         "resolved_question": "How does a retriever rank passages?",
     }
+    assert [item["prompt"] for item in stub_ai[-1]["reply_chain"]] == [
+        first["prompt"], second["prompt"],
+    ]
+    assert stub_ai[-1]["reply_chain"][-1]["resolved_question"] == (
+        "How does a retriever rank passages?"
+    )
 
 
 def test_followup_cannot_target_another_conversation_or_withheld_answer(client, session, stub_ai):
