@@ -2,7 +2,7 @@ import type { Evidence, Interaction } from './api'
 
 export const generalKnowledgeLabel = 'General AI knowledge — not verified against sources'
 export const generalKnowledgeNotice =
-  'Trellis could not find sufficient supporting sources. This explanation uses the model’s general knowledge and may contain inaccuracies.'
+  'Trellis could not verify an answer against the available sources. This explanation uses the model’s general knowledge and may contain inaccuracies.'
 
 const withheldAnswers: Record<string, { label: string; message: string }> = {
   general_knowledge_failed: {

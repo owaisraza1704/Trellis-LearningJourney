@@ -153,7 +153,7 @@ def test_general_provider_failure_reports_generation_unavailable(monkeypatch, ge
 
 
 @pytest.mark.parametrize("failure", ["unsupported", "invalid_citations", "evaluation_outage"])
-def test_failed_source_checks_cannot_be_bypassed_with_general_knowledge(
+def test_failed_source_checks_never_show_the_rejected_draft(
     monkeypatch, general_context, failure,
 ):
     calls = []
@@ -163,7 +163,13 @@ def test_failed_source_checks_cannot_be_bypassed_with_general_knowledge(
 
     def complete(provider, model, schema, messages):
         calls.append(schema)
-        assert schema is not ai.GeneralAnswer
+        if schema is ai.GeneralAnswer:
+            request = json.loads(messages[1]["content"])
+            assert "evidence" not in request
+            assert "previous_answer" not in request
+            return ai.GeneralAnswer(
+                can_answer=True, content="QPS counts queries processed each second.", reason="",
+            )
         if schema is ai.DraftAnswer:
             return ai.DraftAnswer(status="answered", reason="", blocks=[ai.AnswerBlock(
                 text="Horizontal scaling always guarantees unlimited QPS.",
@@ -179,12 +185,18 @@ def test_failed_source_checks_cannot_be_bypassed_with_general_knowledge(
 
     monkeypatch.setattr(ai, "structured_completion", complete)
     result = ai.answer(None, CONTEXT, "Explain more")
-    assert result["status"] == "abstained"
     assert "guarantees unlimited QPS" not in result["content"]
     expected_status = {"unsupported": "low_grounding", "invalid_citations": "invalid_citations",
                        "evaluation_outage": "evaluation_failed"}[failure]
-    assert result["evaluation"]["status"] == expected_status
-    assert len(calls) == {"unsupported": 4, "invalid_citations": 1, "evaluation_outage": 2}[failure]
+    if failure == "evaluation_outage":
+        assert result["status"] == "abstained"
+        assert result["evaluation"]["status"] == expected_status
+        assert ai.GeneralAnswer not in calls
+    else:
+        assert result["status"] == "unverified"
+        assert result["evaluation"]["fallback_reason"] == expected_status
+        assert result["evidence"] == []
+        assert calls[-1] is ai.GeneralAnswer
 
 
 def test_correction_declaring_insufficiency_does_not_bypass_a_failed_grounding_check(
@@ -203,13 +215,17 @@ def test_correction_declaring_insufficiency_does_not_bypass_a_failed_grounding_c
     })
 
     def complete(provider, model, schema, messages):
-        assert schema is not ai.GeneralAnswer
+        if schema is ai.GeneralAnswer:
+            return ai.GeneralAnswer(
+                can_answer=True, content="QPS measures queries handled in one second.", reason="",
+            )
         return next(outputs)
 
     monkeypatch.setattr(ai, "structured_completion", complete)
     result = ai.answer(None, CONTEXT, "Explain more")
-    assert result["status"] == "abstained"
+    assert result["status"] == "unverified"
     assert "unlimited capacity" not in result["content"]
+    assert result["evaluation"]["fallback_reason"] == "insufficient_evidence"
     assert result["evaluation"]["correction_attempted"] is True
 
 

@@ -703,7 +703,7 @@ def render_pdf(record: ExportRecord, output: Path) -> None:
         if item["kind"] == "response" and origin.get("status") == "unverified":
             story.append(Paragraph(
                 "<b>General AI knowledge — not verified against sources</b><br/>"
-                "I could not find sufficient supporting sources. This explanation uses the "
+                "I could not verify an answer against the available sources. This explanation uses the "
                 "model’s general knowledge and may contain inaccuracies.",
                 styles["Context"],
             ))

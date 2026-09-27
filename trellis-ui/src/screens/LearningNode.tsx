@@ -40,6 +40,15 @@ const answerStages: Record<string, string> = {
   presenting: 'Showing the checked answer…',
 }
 
+function answerHeading(interaction: Interaction) {
+  const resolved = interaction.evaluation.resolved_question
+  if (typeof resolved !== 'string' || !resolved.trim()) return interaction.prompt
+  if (interaction.action === 'deeper') return `Go deeper: ${resolved}`
+  if (interaction.action === 'example') return `Example: ${resolved}`
+  if (interaction.action === 'recap') return `Key takeaways: ${resolved}`
+  return interaction.prompt
+}
+
 export default function LearningNode(props: {
   nodeId?: string
   threadId?: string
@@ -118,6 +127,9 @@ function NodeWorkspace({
   const interactions = threadId ? thread.data?.interactions || [] : node.data?.interactions || []
   const active =
     interactions.find((item) => item.id === selected) || interactions[interactions.length - 1]
+  const previousAnswer = interactions.find(
+    (item) => item.id === active?.reply_to_interaction_id && item.status !== 'abstained',
+  )
   const followUpTopic =
     typeof active?.evaluation.resolved_question === 'string'
       ? active.evaluation.resolved_question
@@ -458,13 +470,21 @@ function NodeWorkspace({
                     </p>
                     <Status value={active.status} label={responseFeedback(active).label} />
                   </div>
-                  <h2 className="mb-5 font-display text-xl">{active.prompt}</h2>
+                  <h2 className="mb-5 font-display text-xl">{answerHeading(active)}</h2>
                   {abstained ? (
                     <div className="rounded-xl border border-[#E6DCC8] bg-[#FBF7ED] p-5">
                       <p className="text-sm leading-relaxed text-[#6F6047]">
                         {responseFeedback(active).message}
                       </p>
                       <div className="mt-4 flex flex-wrap gap-2">
+                        {previousAnswer && (
+                          <button
+                            className="btn-secondary"
+                            onClick={() => setSelected(previousAnswer.id)}
+                          >
+                            <ArrowLeft size={14} /> Read previous answer
+                          </button>
+                        )}
                         <button
                           className="btn-secondary"
                           disabled={send.isPending || closed}

@@ -134,7 +134,7 @@ class GeneralAnswer(Output):
 
 
 GENERAL_KNOWLEDGE_NOTICE = (
-    "I couldn't find sufficient supporting sources. This explanation uses the model's "
+    "I couldn't verify an answer against the available sources. This explanation uses the model's "
     "general knowledge and may contain inaccuracies."
 )
 
@@ -924,14 +924,15 @@ def answer(
         return withheld
 
     def general_knowledge(status: str, reason: str) -> dict:
-        if context["sources_only"]:
-            return withhold(status, reason)
+        checked_result = withhold(status, reason)
+        if checked_result["status"] == "answered" or context["sources_only"]:
+            return checked_result
         try:
             report("writing")
             explanation = structured_completion(provider, model, GeneralAnswer, [
                 {"role": "system", "content": (
-                    "You are Trellis, a learning tutor. Sufficient supporting sources for the "
-                    "requested explanation could not be obtained. Provide a useful explanation from general model "
+                    "You are Trellis, a learning tutor. A source-verified answer for the "
+                    "requested explanation could not be produced. Provide a useful explanation from general model "
                     "knowledge, focused on the resolved question and active_topic. The UI will "
                     "label this as unverified general AI knowledge. State uncertainty and avoid "
                     "speculation or precise claims you cannot responsibly make. Follow "
@@ -975,6 +976,8 @@ def answer(
                 "web_search_performed": web_search_performed, "web_search_query": web_search_query,
                 "resolved_question": question, "active_topic": context["active_topic"],
                 "sources_only": False, "evaluated_at": datetime.now(timezone.utc).isoformat(),
+                "correction_attempted": correction_attempted, "checks": checks,
+                "expansion_attempted": expansion_attempted,
             },
         }
 
@@ -1030,18 +1033,16 @@ def answer(
     for attempt in range(2):
         known_ids = {item["id"] for item in evidence}
         if draft.status == "insufficient" or not draft.blocks:
-            if not checks:
-                return general_knowledge("insufficient_evidence", draft.reason)
-            return withhold("insufficient_evidence", draft.reason)
+            return general_knowledge("insufficient_evidence", draft.reason)
         if any(not block.evidence_ids or not set(block.evidence_ids) <= known_ids for block in draft.blocks):
-            return withhold("invalid_citations", "The draft included missing or unknown source references.")
+            return general_knowledge("invalid_citations", "The draft included missing or unknown source references.")
         for block in draft.blocks:
             raw_ids = {source_id.lower() for source_id in SOURCE_ID_MARKER.findall(block.text)}
             if not raw_ids <= {source_id.lower() for source_id in block.evidence_ids}:
-                return withhold("invalid_citations", "The draft included an unknown source reference.")
+                return general_knowledge("invalid_citations", "The draft included an unknown source reference.")
             block.text = SOURCE_ID_MARKER.sub("", block.text).rstrip()
             if not block.text:
-                return withhold("invalid_citations", "The draft contained only source references.")
+                return general_knowledge("invalid_citations", "The draft contained only source references.")
         try:
             report("checking")
             evaluation = structured_completion(provider, model, AnswerEvaluation, [
@@ -1146,7 +1147,7 @@ def answer(
                     return answered(*verified_partial)
                 return answered(draft, evaluation)
         if attempt == 1:
-            return withhold("low_grounding", evaluation.explanation)
+            return general_knowledge("low_grounding", evaluation.explanation)
         correction_attempted = True
         try:
             draft = draft_with(evidence, previous=draft, feedback=evaluation.explanation)

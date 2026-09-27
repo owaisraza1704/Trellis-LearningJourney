@@ -212,6 +212,7 @@ test('follow-up buttons target the answer currently open in the lesson', async (
     ...generalAnswer,
     id: 'later-answer',
     prompt: 'Go deeper into the answer to: Explain QPS',
+    action: 'deeper',
     content: 'A cache miss can increase request latency while the database loads the item.',
     evaluation: {
       ...generalAnswer.evaluation,
@@ -222,7 +223,12 @@ test('follow-up buttons target the answer currently open in the lesson', async (
   await page.goto(`/?screen=node&path=${journey.id}&node=${node.id}`)
   for (const [index, label] of ['Show example', 'Go deeper', 'Key takeaways'].entries()) {
     await page.getByRole('button', { name: `Read response to ${laterAnswer.prompt}` }).click()
-    await expect(page.getByRole('heading', { name: laterAnswer.prompt, exact: true })).toBeVisible()
+    await expect(
+      page.getByRole('heading', {
+        name: 'Go deeper: How does a cache miss affect request latency?',
+        exact: true,
+      }),
+    ).toBeVisible()
     await page.getByRole('button', { name: label, exact: true }).click()
     await expect.poll(() => state.questions.length).toBe(index + 1)
     expect(state.questions[index].reply_to_interaction_id).toBe(laterAnswer.id)
@@ -249,6 +255,39 @@ test('retrying a failed follow-up keeps its selected answer', async ({ page }) =
   await expect.poll(() => state.questions.length).toBe(1)
   expect(state.questions[0].reply_to_interaction_id).toBe(generalAnswer.id)
   expect(state.questions[0].prompt).toBe(failedFollowUp.prompt)
+})
+
+test('a withheld follow-up can return to the answer it was extending', async ({ page }) => {
+  const previousDeeper: Interaction = {
+    ...generalAnswer,
+    prompt: 'Go deeper into the answer to: Introduce QPS',
+    action: 'deeper',
+    evaluation: {
+      ...generalAnswer.evaluation,
+      resolved_question: 'How do cache misses affect QPS?',
+    },
+  }
+  const failedFollowUp: Interaction = {
+    ...generalAnswer,
+    id: 'failed-follow-up',
+    prompt: 'Go deeper into the answer to: Explain QPS',
+    action: 'deeper',
+    status: 'abstained',
+    reply_to_interaction_id: previousDeeper.id,
+    content: 'No answer shown.',
+  }
+  const state = await mockJourney(page, [previousDeeper, failedFollowUp])
+  await page.goto(`/?screen=node&path=${journey.id}&node=${node.id}`)
+  await expect(page.getByRole('button', { name: 'Go deeper', exact: true })).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Read previous answer' }).click()
+  await expect(
+    page.getByRole('heading', { name: 'Go deeper: How do cache misses affect QPS?' }),
+  ).toBeVisible()
+  await page.getByRole('button', { name: 'Go deeper', exact: true }).click()
+
+  await expect.poll(() => state.questions.length).toBe(1)
+  expect(state.questions[0].reply_to_interaction_id).toBe(previousDeeper.id)
 })
 
 test('Sources only is optional and applies to questions and quick actions', async ({ page }) => {

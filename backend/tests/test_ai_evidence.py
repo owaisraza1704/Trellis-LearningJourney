@@ -68,10 +68,40 @@ def test_missing_or_invented_citations_are_withheld(monkeypatch, supported_answe
         return supported_answer
 
     monkeypatch.setattr(ai, "structured_completion", complete)
-    result = ai.answer(None, CONTEXT, "Explain functions")
+    result = ai.answer(None, {**CONTEXT, "sources_only": True}, "Explain functions")
     assert result["evaluation"]["status"] == "invalid_citations"
     assert "Use `def`" not in result["content"]
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("failure", ["invalid_citations", "low_grounding"])
+def test_failed_source_checks_use_labelled_general_knowledge_when_allowed(
+    monkeypatch, supported_answer, failure,
+):
+    draft = supported_answer.model_copy(deep=True)
+    if failure == "invalid_citations":
+        draft.blocks[0].evidence_ids = ["invented-source"]
+    responses = [draft]
+    if failure == "low_grounding":
+        review = ai.AnswerEvaluation(
+            relevance=1, completeness=0.5, consistency=0.2, grounding=0.2,
+            supported=False, explanation="The cited passage does not support the claim.",
+        )
+        responses.extend([review, draft, review])
+    responses.append(ai.GeneralAnswer(
+        can_answer=True,
+        content="A function groups reusable steps and can receive arguments.",
+        reason="",
+    ))
+    monkeypatch.setattr(ai, "structured_completion", lambda *args: responses.pop(0))
+
+    result = ai.answer(None, CONTEXT, "Explain functions")
+
+    assert result["status"] == "unverified"
+    assert result["evaluation"]["fallback_reason"] == failure
+    assert result["evaluation"]["sources_only"] is False
+    assert result["evidence"] == []
+    assert "function groups reusable steps" in result["content"]
 
 
 def test_supported_answer_records_exact_citations_and_evaluation(monkeypatch, supported_answer):
@@ -115,7 +145,7 @@ def test_unknown_model_written_source_id_is_withheld(monkeypatch, supported_answ
     )
     monkeypatch.setattr(ai, "structured_completion", lambda *args: supported_answer)
 
-    result = ai.answer(None, CONTEXT, "How are functions defined?")
+    result = ai.answer(None, {**CONTEXT, "sources_only": True}, "How are functions defined?")
 
     assert result["evaluation"]["status"] == "invalid_citations"
     assert "Use `def`" not in result["content"]
@@ -273,7 +303,7 @@ def test_deeper_followup_withholds_shallow_partial_after_failed_revision(
     monkeypatch.setattr(ai, "structured_completion", lambda *args: next(responses))
 
     result = ai.answer(None, {
-        **CONTEXT, "answer_action": "deeper",
+        **CONTEXT, "answer_action": "deeper", "sources_only": True,
         "focus_interaction": {
             "prompt": "How do functions work?", "content": "A function can have parameters.",
             "status": "answered",
@@ -400,7 +430,7 @@ def test_failed_correction_is_withheld_concisely(monkeypatch, supported_answer):
         return next(results)
 
     monkeypatch.setattr(ai, "structured_completion", complete)
-    result = ai.answer(None, CONTEXT, "Explain functions")
+    result = ai.answer(None, {**CONTEXT, "sources_only": True}, "Explain functions")
     assert result["evaluation"]["status"] == "low_grounding"
     assert "Use `def`" not in result["content"]
     assert "851a8f96" not in result["content"]
@@ -474,7 +504,7 @@ def test_corrected_draft_must_still_pass_citation_membership(monkeypatch, suppor
         invalid,
     ])
     monkeypatch.setattr(ai, "structured_completion", lambda *args: next(results))
-    result = ai.answer(None, CONTEXT, "Explain functions")
+    result = ai.answer(None, {**CONTEXT, "sources_only": True}, "Explain functions")
     assert result["evaluation"]["status"] == "invalid_citations"
     assert result["evaluation"]["correction_attempted"] is True
     assert len(result["evaluation"]["checks"]) == 1
