@@ -124,6 +124,60 @@ test('flat topics form a readable learning sequence without changing their hiera
   expect(state.path.nodes.every((node) => node.parent_id === null)).toBe(true)
 })
 
+test('hierarchy graph follows curriculum order from left to right at every depth', async ({
+  page,
+}) => {
+  const hierarchy: PathDetail = {
+    ...systemDesign,
+    id: 'interview-preparation',
+    title: 'AI Interview Preparation',
+    nodes: [
+      { id: 'fundamentals', title: 'Fundamentals', parent_id: null },
+      { id: 'llms', title: 'LLMs', parent_id: 'fundamentals' },
+      { id: 'embeddings', title: 'Embeddings', parent_id: 'fundamentals' },
+      { id: 'retrieval', title: 'Retrieval', parent_id: 'fundamentals' },
+      { id: 'vector', title: 'Vector Retrieval', parent_id: 'retrieval' },
+      { id: 'keyword', title: 'Keyword Retrieval', parent_id: 'retrieval' },
+      { id: 'prompting', title: 'Prompting', parent_id: 'fundamentals' },
+      { id: 'fine-tuning', title: 'Fine-Tuning', parent_id: 'fundamentals' },
+      { id: 'system-design', title: 'System Design', parent_id: null },
+      { id: 'rag', title: 'RAG Architectures', parent_id: 'system-design' },
+      { id: 'agents', title: 'Agent Workflows', parent_id: 'system-design' },
+    ].map((node, position) => ({
+      ...node,
+      path_id: 'interview-preparation',
+      description: '',
+      position,
+      status: 'not_started',
+    })),
+  }
+  await mockCurriculum(page, hierarchy, 'llms')
+  await page.goto('/?screen=graph&path=interview-preparation')
+  const graph = page.getByLabel('Curriculum graph', { exact: true })
+  await expect(graph.locator('.react-flow__node')).toHaveCount(hierarchy.nodes.length)
+
+  const positions = await graph
+    .locator('.react-flow__node')
+    .evaluateAll((elements) =>
+      Object.fromEntries(
+        elements.map((element) => [
+          element.getAttribute('data-id'),
+          element.getBoundingClientRect().x,
+        ]),
+      ),
+    )
+  for (const ids of [
+    ['fundamentals', 'system-design'],
+    ['llms', 'embeddings', 'retrieval', 'prompting', 'fine-tuning'],
+    ['vector', 'keyword'],
+    ['rag', 'agents'],
+  ]) {
+    for (let index = 1; index < ids.length; index++) {
+      expect(positions[ids[index - 1]]).toBeLessThan(positions[ids[index]])
+    }
+  }
+})
+
 test('a Python topic hierarchy keeps parent relationships and distinguishes studied topics', async ({
   page,
 }) => {
@@ -222,4 +276,16 @@ test('a Python topic hierarchy keeps parent relationships and distinguishes stud
     pop: 'lists',
     stacks: 'pop',
   })
+  await page.getByRole('button', { name: 'Graph', exact: true }).click()
+  const reorderedX = await graph
+    .locator('.react-flow__node')
+    .evaluateAll((elements) =>
+      Object.fromEntries(
+        elements.map((element) => [
+          element.getAttribute('data-id'),
+          element.getBoundingClientRect().x,
+        ]),
+      ),
+    )
+  expect(reorderedX.pop).toBeLessThan(reorderedX.append)
 })

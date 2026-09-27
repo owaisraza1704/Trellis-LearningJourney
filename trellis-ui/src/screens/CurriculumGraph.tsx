@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Background, Controls, MarkerType, Position, ReactFlow } from '@xyflow/react'
-import dagre from '@dagrejs/dagre'
 import {
   ArrowDown,
   ArrowUp,
@@ -177,21 +176,43 @@ export default function CurriculumGraph({
   }
   addOutlineRows(null, 0)
   const graph = useMemo(() => {
-    const layout = new dagre.graphlib.Graph()
-      .setGraph({ rankdir: 'TB', nodesep: 40, ranksep: 75 })
-      .setDefaultEdgeLabel(() => ({}))
-    nodes.forEach((node) => layout.setNode(node.id, { width: 230, height: 120 }))
-    nodes.forEach((node) => {
-      if (node.parent_id) layout.setEdge(node.parent_id, node.id)
-    })
-    if (!isSequence) dagre.layout(layout)
+    const positions = new Map<string, { x: number; y: number }>()
+    if (!isSequence) {
+      const widths = new Map<string, number>()
+      function measure(node: LearningNode): number {
+        const children = childrenByParent.get(node.id) || []
+        const childrenWidth = children.reduce((total, child) => total + measure(child), 0)
+        const width = Math.max(230, childrenWidth + Math.max(0, children.length - 1) * 40)
+        widths.set(node.id, width)
+        return width
+      }
+      function place(node: LearningNode, left: number, depth: number) {
+        const width = widths.get(node.id)!
+        positions.set(node.id, { x: left + width / 2, y: 60 + depth * 195 })
+        const children = childrenByParent.get(node.id) || []
+        const childrenWidth =
+          children.reduce((total, child) => total + widths.get(child.id)!, 0) +
+          Math.max(0, children.length - 1) * 40
+        let childLeft = left + (width - childrenWidth) / 2
+        for (const child of children) {
+          place(child, childLeft, depth + 1)
+          childLeft += widths.get(child.id)! + 40
+        }
+      }
+      let left = 0
+      for (const root of childrenByParent.get(null) || []) {
+        const width = measure(root)
+        place(root, left, 0)
+        left += width + 40
+      }
+    }
     return {
       nodes: nodes.map((node, index) => {
         const row = Math.floor(index / 2)
         const column = row % 2 === 0 ? index % 2 : 1 - (index % 2)
         const point = isSequence
           ? { x: column * 300 + 115, y: row * 180 + 60 }
-          : layout.node(node.id)
+          : positions.get(node.id)!
         return {
           id: node.id,
           position: { x: point.x - 115, y: point.y - 60 },
