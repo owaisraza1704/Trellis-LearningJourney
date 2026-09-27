@@ -506,6 +506,7 @@ def interact(session: Session, node: Node, body: MessageInput, thread: Thread | 
         raise HTTPException(409, "Reopen this thread before adding a message.")
     context = build_context(session, node, thread)
     context["sources_only"] = body.sources_only
+    context["answer_action"] = body.action
     result = ai.answer(session, context, body.prompt)
     interaction = Interaction(path_id=node.path_id, node_id=node.id,
                               thread_id=thread.id if thread else None, prompt=body.prompt,

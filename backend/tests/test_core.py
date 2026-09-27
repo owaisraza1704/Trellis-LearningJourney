@@ -36,6 +36,17 @@ def test_curriculum_edits_reorder_and_progress_survive_new_client(client, stub_a
     assert stub_ai[-1]["node_count"] == 3
 
 
+def test_learning_action_reaches_answer_service(client, stub_ai):
+    path = create_path(client)
+    node_id = path["nodes"][0]["id"]
+    response = client.post(f"/api/nodes/{node_id}/interactions", json={
+        "prompt": "Explain this topic in more depth", "action": "deeper",
+    })
+    assert response.status_code == 201
+    assert response.json()["action"] == "deeper"
+    assert stub_ai[-1]["answer_action"] == "deeper"
+
+
 def test_group_status_follows_leaf_progress_and_groups_cannot_be_studied(client, stub_ai):
     path = create_path(client)
     group, another_leaf, _ = [node["id"] for node in path["nodes"]]

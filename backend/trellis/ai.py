@@ -138,6 +138,48 @@ GENERAL_KNOWLEDGE_NOTICE = (
     "general knowledge and may contain inaccuracies."
 )
 
+ANSWER_GUIDANCE = {
+    "foundation": (
+        "Give a study-ready introduction, usually about 220-350 words when the excerpts support "
+        "it. Explain what the concept is, how it works step by step, why its main parts matter, "
+        "and one concrete example or important limitation when supported. Use short paragraphs "
+        "or bullets, not a terse definition."
+    ),
+    "deeper": (
+        "Give a study-ready deeper explanation, usually about 220-350 words when the excerpts "
+        "support it. Build on the preceding answer rather than repeat its definition. Develop "
+        "one or two aspects it did not explain: the mechanism step by step, why it works, and a "
+        "supported example, trade-off, or edge case. If the excerpts cannot support meaningful "
+        "new detail, identify the missing evidence instead of paraphrasing the previous answer."
+    ),
+    "example": (
+        "Walk through one concrete example with its setup, steps, outcome, and why it illustrates "
+        "the concept. Aim for about 180-300 words when the evidence supports it; do not invent "
+        "details to make the example longer."
+    ),
+    "comparison": (
+        "Compare the concepts along clear criteria, explain their similarities and differences, "
+        "and say when each is useful if the evidence supports that distinction. Aim for about "
+        "200-350 words when the excerpts support that depth."
+    ),
+    "application": (
+        "Explain a practical application as a sequence of decisions or steps, including relevant "
+        "constraints and failure modes when supported. Aim for about 200-350 words when the "
+        "excerpts support that depth."
+    ),
+    "question": (
+        "Answer every part of the learner's question with enough reasoning to make the answer "
+        "useful for study, not just a definition or list of terms. For an open-ended explanation, "
+        "aim for about 180-300 words when the evidence supports it; a narrow factual question "
+        "can be answered more briefly."
+    ),
+}
+
+DETAILED_REQUEST = re.compile(
+    r"\b(?:in detail|detailed|thorough(?:ly)?|comprehensive|step[- ]by[- ]step|deep dive)\b",
+    re.IGNORECASE,
+)
+
 
 def passes_grounding(evaluation: Evaluation) -> bool:
     return (
@@ -743,11 +785,28 @@ def answer(session: Session, context: dict, prompt: str) -> dict:
     }
     resolved = resolve_question(provider, model, context, prompt)
     context["sources_only"] = bool(context.get("sources_only") or resolved.sources_only)
+    context["response_guidance"] = ANSWER_GUIDANCE.get(
+        context.get("answer_action"), ANSWER_GUIDANCE["question"]
+    )
+    detailed_answer = context.get("answer_action") in {"foundation", "deeper"} or bool(
+        DETAILED_REQUEST.search(prompt)
+    )
+    if detailed_answer and context.get("answer_action") not in {"foundation", "deeper"}:
+        context["response_guidance"] = (
+            "The learner explicitly asked for detail. Give a study-ready explanation, usually "
+            "about 220-350 words when the excerpts support it. Explain the mechanism or process, "
+            "important distinctions, and a concrete example or limitation when supported. Do not "
+            "just name concepts: for types or metrics, explain how each works or what it measures "
+            "and give a meaningful distinction when supported. Prefer explained points over a "
+            "long list of one-line definitions. If supporting detail is missing, identify that "
+            "gap instead of padding or inventing facts."
+        )
     question, query = resolved.question, resolved.search_query
     result = retrieve_evidence(session, query, path_id=context["path_id"])
     evidence = result["evidence"]
     checks = []
     correction_attempted = False
+    expansion_attempted = False
     web_search_performed = result.get("web_search_performed", False)
     web_search_query = query if web_search_performed else None
     research_attempted = web_search_performed
@@ -782,6 +841,7 @@ def answer(session: Session, context: dict, prompt: str) -> dict:
             "evaluated_at": datetime.now(timezone.utc).isoformat(),
             "retrieval_warnings": result["warnings"],
             "correction_attempted": correction_attempted, "checks": checks,
+            "expansion_attempted": expansion_attempted,
             "web_search_performed": web_search_performed, "web_search_query": web_search_query,
             "partial_answer_preserved": verified_partial is not None and draft is verified_partial[0],
             "resolved_question": question, "active_topic": context["active_topic"],
@@ -807,6 +867,7 @@ def answer(session: Session, context: dict, prompt: str) -> dict:
         withheld = abstention(provider, model, evidence, status, reason, result["warnings"])
         withheld["evaluation"].update(
             correction_attempted=correction_attempted, checks=checks, provider=provider, model=model,
+            expansion_attempted=expansion_attempted,
             web_search_performed=web_search_performed, web_search_query=web_search_query,
             resolved_question=question, active_topic=context["active_topic"],
             sources_only=context["sources_only"],
@@ -829,7 +890,9 @@ def answer(session: Session, context: dict, prompt: str) -> dict:
                     "could not be obtained. Provide a useful explanation from general model "
                     "knowledge, focused on the resolved question and active_topic. The UI will "
                     "label this as unverified general AI knowledge. State uncertainty and avoid "
-                    "speculation or precise claims you cannot responsibly make. Examples may be "
+                    "speculation or precise claims you cannot responsibly make. Follow "
+                    "context.response_guidance and give a focused explanation rather than a terse "
+                    "definition; do not pad or repeat points. Examples may be "
                     "clearly described as illustrative. Do not include citations, source links, "
                     "bibliographies, or claims that you searched or verified facts. Do not claim "
                     "what an unavailable document says, quote unseen material, or invent personal "
@@ -876,8 +939,11 @@ def answer(session: Session, context: dict, prompt: str) -> dict:
         "supported by the provided excerpts. Use supplied material before web material, and explain "
         "conflicts rather than selecting a convenient claim. Never answer from memory, speculate, "
         "or invent examples. Examples and code may only restate examples supported by evidence. "
-        "Return short readable Markdown blocks, each with the IDs of excerpts supporting all its "
-        "claims. Do not put citation numbers inside the text; the app adds them. Do not generate "
+        "Follow context.response_guidance. Give a focused teaching explanation with enough "
+        "substance for the requested depth when the evidence supports it; do not pad or repeat "
+        "points to make it longer. Keep each Markdown block readable and attach the IDs of excerpts "
+        "supporting all its claims. Do not write citation numbers or placeholders such as "
+        "[citation] in the text; the app adds citations. Do not generate "
         "URLs. If the question cannot be answered from evidence, return status insufficient, no "
         "blocks, and a brief reason describing the missing evidence. Assess coverage of the entire "
         "question, even when some excerpts are relevant. If necessary information is missing, set "
@@ -937,10 +1003,19 @@ def answer(session: Session, context: dict, prompt: str) -> dict:
                     "web search query for that gap, including the topic names; prefer primary or "
                     "official documentation when appropriate. This applies even to a supported but "
                     "partial answer. Do not include personal information from documents or context. "
+                    "For an explicitly detailed question, excerpts that only name approaches or "
+                    "give one-line definitions may be insufficient for the requested mechanisms, "
+                    "distinctions, or examples. Identify that gap with a targeted public search "
+                    "query rather than declaring the shallow summary complete. "
                     "Leave missing_evidence empty if the excerpts already contain the needed facts: "
                     "wrong citations, contradictions, and unnecessary unsupported additions should "
                     "be corrected using existing evidence, not researched. Evaluate relevance and "
-                    "completeness against the resolved question and context.active_topic. In an "
+                    "completeness against the resolved question, context.active_topic, and "
+                    "context.response_guidance: a definition alone does not satisfy a request for "
+                    "a deeper explanation when supporting details are available, and repeating "
+                    "context.history without adding supported substance is incomplete. Do not "
+                    "award high completeness to a terse introduction that omits useful mechanisms "
+                    "or distinctions present in the excerpts. In an "
                     "exploratory thread, parent-node details are background: do not penalize an "
                     "answer for omitting unrelated parent topics. History resolves references but "
                     "never verifies facts, including prior unverified AI explanations."
@@ -960,10 +1035,47 @@ def answer(session: Session, context: dict, prompt: str) -> dict:
             attempt == 0 and bool(evaluation.missing_evidence)
             and supplement_evidence(evaluation.missing_evidence)
         )
+        answer_words = sum(len(block.text.split()) for block in draft.blocks)
+        evidence_words = sum(len(item["excerpt"].split()) for item in evidence)
+        needs_depth = (
+            attempt == 0 and detailed_answer
+            and (answer_words < 220 or evaluation.completeness < 0.9)
+        )
+        if (needs_depth and (evidence_words < 350 or evaluation.completeness < 0.9)
+                and passes_grounding(evaluation) and not added_evidence
+                and not research_attempted and not context["sources_only"]):
+            added_evidence = supplement_evidence(
+                f"{query} detailed explanation mechanisms examples"
+            )
         if passes_grounding(evaluation):
-            if not added_evidence:
+            if added_evidence:
+                verified_partial = (draft, evaluation)
+                expansion_attempted = expansion_attempted or needs_depth
+            elif needs_depth:
+                # Preserve this supported answer if the one expansion cannot be verified.
+                verified_partial = (draft, evaluation)
+                correction_attempted = expansion_attempted = True
+                try:
+                    draft = draft_with(
+                        evidence, previous=draft,
+                        feedback=(
+                            "The answer is supported but too brief or incomplete for the requested "
+                            "depth. Expand it to about 220-350 words using specific facts in the "
+                            "excerpts. Explain mechanisms and useful distinctions instead of "
+                            "listing names; add an example or limitation only if supported. "
+                            "Do not repeat points or invent detail. Review feedback: "
+                            + evaluation.explanation
+                        ),
+                    )
+                except HTTPException as error:
+                    return withhold("correction_failed", str(error.detail))
+                continue
+            else:
+                if (expansion_attempted and verified_partial is not None
+                        and sum(len(block.text.split()) for block in draft.blocks)
+                        <= sum(len(block.text.split()) for block in verified_partial[0].blocks)):
+                    return answered(*verified_partial)
                 return answered(draft, evaluation)
-            verified_partial = (draft, evaluation)
         if attempt == 1:
             return withhold("low_grounding", evaluation.explanation)
         correction_attempted = True

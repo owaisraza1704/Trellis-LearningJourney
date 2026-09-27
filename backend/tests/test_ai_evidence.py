@@ -37,6 +37,7 @@ def supported_answer(monkeypatch):
     monkeypatch.setattr(ai, "selected_provider", lambda session: ("azure", "test-model"))
     monkeypatch.setattr(evidence, "retrieve_evidence", lambda *args, **kwargs: {
         "evidence": [dict(EVIDENCE)], "warnings": [],
+        "web_search_performed": bool(kwargs.get("supplement_web")),
     })
     return ai.DraftAnswer(
         status="answered", blocks=[ai.AnswerBlock(text="Use `def` to define a function.", evidence_ids=["chunk-one"])],
@@ -86,6 +87,176 @@ def test_supported_answer_records_exact_citations_and_evaluation(monkeypatch, su
     assert answer["evaluation"]["completeness"] == 0.8
     assert answer["evaluation"]["citations_valid"] is True
     assert answer["evaluation"]["evaluated_at"]
+
+
+@pytest.mark.parametrize("action, expected", [
+    ("foundation", "220-350 words"),
+    ("deeper", "220-350 words"),
+    ("question", "Answer every part"),
+])
+def test_answer_depth_guidance_reaches_writer_and_reviewer(
+    monkeypatch, supported_answer, action, expected,
+):
+    calls = []
+
+    def complete(provider, model, schema, messages):
+        calls.append((schema, messages))
+        if schema == ai.DraftAnswer:
+            return supported_answer
+        return ai.AnswerEvaluation(relevance=1, completeness=1, consistency=1, grounding=1,
+                                   supported=True, explanation="Supported answer.")
+
+    monkeypatch.setattr(ai, "structured_completion", complete)
+    result = ai.answer(None, {**CONTEXT, "answer_action": action}, "Explain functions")
+    assert result["status"] == "answered"
+    assert len(calls) == (4 if action in {"foundation", "deeper"} else 2)
+    for _, messages in calls:
+        assert expected in json.loads(messages[1]["content"])["context"]["response_guidance"]
+    assert "focused teaching explanation" in calls[0][1][0]["content"]
+    assert "context.response_guidance" in calls[1][1][0]["content"]
+
+
+def test_detailed_question_expands_a_supported_but_brief_answer(monkeypatch, supported_answer):
+    rich_source = {**EVIDENCE, "kind": "text", "excerpt": (
+        "A function is defined with def and can accept parameters. Its body runs when called. "
+        "A return statement sends a result to the caller. "
+    ) * 36}
+    searches = []
+
+    def retrieve(*args, **kwargs):
+        searches.append(kwargs)
+        return {"evidence": [rich_source], "warnings": [], "web_search_performed": False}
+
+    monkeypatch.setattr(evidence, "retrieve_evidence", retrieve)
+    expanded = ai.DraftAnswer(status="answered", reason="", blocks=[ai.AnswerBlock(
+        text="The def keyword names a function and its parameters. Calling it runs the body, "
+             "and a return statement sends a result to the caller.",
+        evidence_ids=["chunk-one"],
+    )])
+    review = ai.AnswerEvaluation(relevance=1, completeness=1, consistency=1, grounding=1,
+                                 supported=True, explanation="All claims are supported.")
+    outputs = iter([supported_answer, review, expanded, review])
+    calls = []
+
+    def complete(provider, model, schema, messages):
+        calls.append((schema, messages))
+        return next(outputs)
+
+    monkeypatch.setattr(ai, "structured_completion", complete)
+    result = ai.answer(None, CONTEXT, "Explain functions in detail")
+    assert result["status"] == "answered"
+    assert result["content"].startswith("The def keyword names a function")
+    assert result["evaluation"]["expansion_attempted"] is True
+    assert len(result["evaluation"]["checks"]) == 2
+    assert [schema for schema, _ in calls] == [
+        ai.DraftAnswer, ai.AnswerEvaluation, ai.DraftAnswer, ai.AnswerEvaluation,
+    ]
+    assert "too brief" in json.loads(calls[2][1][1]["content"])["evaluation_feedback"]
+    assert len(searches) == 1
+
+
+def test_failed_detailed_expansion_keeps_the_verified_answer(monkeypatch, supported_answer):
+    rich_source = {**EVIDENCE, "excerpt": "The keyword def defines a function. " * 100}
+    monkeypatch.setattr(evidence, "retrieve_evidence", lambda *args, **kwargs: {
+        "evidence": [rich_source], "warnings": [], "web_search_performed": False,
+    })
+    unsupported = ai.DraftAnswer(status="answered", reason="", blocks=[ai.AnswerBlock(
+        text="Functions cannot accept parameters.", evidence_ids=["chunk-one"],
+    )])
+    outputs = iter([
+        supported_answer,
+        ai.AnswerEvaluation(relevance=1, completeness=1, consistency=1, grounding=1,
+                            supported=True, explanation="Supported."),
+        unsupported,
+        ai.AnswerEvaluation(relevance=1, completeness=0.2, consistency=0.2, grounding=0.2,
+                            supported=False, explanation="The expansion is unsupported."),
+    ])
+    monkeypatch.setattr(ai, "structured_completion", lambda *args: next(outputs))
+    result = ai.answer(None, CONTEXT, "Explain functions in detail")
+    assert result["status"] == "answered"
+    assert result["content"] == "Use `def` to define a function.\n\n[1]"
+    assert result["evaluation"]["partial_answer_preserved"] is True
+    assert result["evaluation"]["expansion_attempted"] is True
+
+
+def test_detailed_question_researches_shallow_sources_before_expanding(monkeypatch):
+    supplied = {**EVIDENCE, "excerpt": "Functions can have names and parameters. " * 80}
+    discovered = {**EVIDENCE, "id": "web-detail", "source_id": "web-source",
+                  "excerpt": "Calling a function binds arguments, runs its body, and returns a result."}
+    searches = []
+
+    def retrieve(session, query, **kwargs):
+        searches.append((query, kwargs))
+        return {
+            "evidence": [supplied, discovered] if kwargs.get("supplement_web") else [supplied],
+            "warnings": [], "web_search_performed": bool(kwargs.get("supplement_web")),
+        }
+
+    first = ai.DraftAnswer(status="answered", reason="", blocks=[ai.AnswerBlock(
+        text="Functions have names and parameters.", evidence_ids=["chunk-one"],
+    )])
+    expanded = ai.DraftAnswer(status="answered", reason="", blocks=[ai.AnswerBlock(
+        text="Calling a function binds arguments, runs its body, and returns a result.",
+        evidence_ids=["web-detail"],
+    )])
+    outputs = iter([
+        first,
+        ai.AnswerEvaluation(relevance=1, completeness=0.8, consistency=1, grounding=1,
+                            supported=True, explanation="Only the parts are named."),
+        expanded,
+        ai.AnswerEvaluation(relevance=1, completeness=1, consistency=1, grounding=1,
+                            supported=True, explanation="The mechanism is supported."),
+    ])
+    monkeypatch.setattr(ai, "selected_provider", lambda session: ("azure", "test-model"))
+    monkeypatch.setattr(evidence, "retrieve_evidence", retrieve)
+    monkeypatch.setattr(ai, "structured_completion", lambda *args: next(outputs))
+    result = ai.answer(None, CONTEXT, "Explain functions in detail")
+    assert result["status"] == "answered"
+    assert result["evidence"] == [discovered]
+    assert result["evaluation"]["web_search_performed"] is True
+    assert result["evaluation"]["expansion_attempted"] is True
+    assert searches[1][0].endswith("detailed explanation mechanisms examples")
+    assert searches[1][1]["supplement_web"] is True
+
+
+def test_foundation_researches_when_a_brief_answer_has_sparse_evidence(monkeypatch):
+    supplied = {**EVIDENCE, "title": "General Python overview",
+                "excerpt": "Functions can have names and parameters. " * 40}
+    discovered = {**EVIDENCE, "id": "web-detail", "source_id": "web-source",
+                  "title": "Python function tutorial",
+                  "excerpt": "A function runs its body when called and returns a result to the caller."}
+    searches = []
+
+    def retrieve(session, query, **kwargs):
+        searches.append((query, kwargs))
+        return {
+            "evidence": [supplied, discovered] if kwargs.get("supplement_web") else [supplied],
+            "warnings": [], "web_search_performed": bool(kwargs.get("supplement_web")),
+        }
+
+    brief = ai.DraftAnswer(status="answered", reason="", blocks=[ai.AnswerBlock(
+        text="Functions can have names and parameters.", evidence_ids=["chunk-one"],
+    )])
+    expanded = ai.DraftAnswer(status="answered", reason="", blocks=[ai.AnswerBlock(
+        text="A function has a name and parameters. When called, it runs its body and returns a "
+             "result to the caller.", evidence_ids=["chunk-one", "web-detail"],
+    )])
+    review = ai.AnswerEvaluation(relevance=1, completeness=1, consistency=1, grounding=1,
+                                 supported=True, explanation="The cited claims are supported.")
+    outputs = iter([brief, review, expanded, review])
+    monkeypatch.setattr(ai, "selected_provider", lambda session: ("azure", "test-model"))
+    monkeypatch.setattr(evidence, "retrieve_evidence", retrieve)
+    monkeypatch.setattr(ai, "structured_completion", lambda *args: next(outputs))
+
+    result = ai.answer(None, {**CONTEXT, "answer_action": "foundation"}, "Introduce functions")
+
+    assert result["status"] == "answered"
+    assert result["evidence"] == [supplied, discovered]
+    assert result["evaluation"]["web_search_performed"] is True
+    assert result["evaluation"]["expansion_attempted"] is True
+    assert len(result["evaluation"]["checks"]) == 2
+    assert len(searches) == 2
+    assert searches[1][1]["supplement_web"] is True
 
 
 def test_generated_citations_stay_outside_fenced_code(monkeypatch, supported_answer):
