@@ -148,8 +148,8 @@ ANSWER_GUIDANCE = {
     "deeper": (
         "Continue the selected answer rather than writing a new introduction. Use at most one "
         "short sentence to connect to what the learner already read, then develop the single "
-        "underexplained point named in the resolved question. Explain its mechanism, reason, "
-        "or trade-off with concrete supported detail. Do not repeat the selected answer's "
+        "underexplained point named in the resolved question. Teach how it works step by step, "
+        "why it matters, and a concrete example or trade-off when supported. Do not repeat the selected answer's "
         "definition, stage list, or conclusion just to make this response self-contained. Aim for "
         "about 220-350 words only when there is enough new evidence; if not, explain what detail "
         "the available evidence cannot support instead of paraphrasing the previous answer."
@@ -746,6 +746,7 @@ def abstention(
     summaries = {
         "evidence_unavailable": "I couldn't find usable supporting sources. Add a relevant document or URL, then try again.",
         "insufficient_evidence": "The available sources don't support an answer yet. Add a more relevant source or ask a narrower question.",
+        "insufficient_depth": "The available sources support only a brief answer, not the deeper explanation requested. Add a relevant source or turn off Sources only.",
         "evaluation_failed": "I couldn't complete the evidence check. Please try again.",
         "correction_failed": "I couldn't finish checking a corrected answer. Please try again.",
         "general_knowledge_failed": "I couldn't generate a general explanation. Please try again or check the model connection in Settings.",
@@ -775,7 +776,9 @@ def resolve_question(provider: str, model: str, context: dict, prompt: str) -> R
             "active_topic and the most recent relevant conversation to resolve short follow-ups "
             "such as 'Explain more', 'Why?', or 'Show an example'. "
             "If context.answer_action is 'deeper' and focus_interaction exists, choose exactly "
-            "one important claim or concept that answer raised but did not explain how or why. "
+            "one important process or design choice that answer raised but did not explain how "
+            "or why. Prefer a teachable mechanism over an incidental caveat or anecdote, unless "
+            "the selected answer is mainly about that caveat. "
             "Return one narrow question about that point. Do not combine several stages or turn "
             "the answer's outline into a checklist, and do not ask for another overview. Make "
             "search_query target only the chosen point. "
@@ -824,6 +827,7 @@ def answer(
     detailed_answer = context.get("answer_action") in {"foundation", "deeper"} or bool(
         DETAILED_REQUEST.search(prompt)
     )
+    focused_deeper = context.get("answer_action") == "deeper" and bool(context.get("focus_interaction"))
     if detailed_answer and context.get("answer_action") not in {"foundation", "deeper"}:
         context["response_guidance"] = (
             "The learner explicitly asked for detail. Give a study-ready explanation, usually "
@@ -897,8 +901,11 @@ def answer(
         }
 
     def withhold(status: str, reason: str) -> dict:
-        if verified_partial is not None:
-            return answered(*verified_partial)
+        if verified_partial is not None and status != "insufficient_depth":
+            earlier, earlier_review = verified_partial
+            earlier_words = sum(len(block.text.split()) for block in earlier.blocks)
+            if not focused_deeper or (earlier_words >= 180 and earlier_review.completeness >= 0.85):
+                return answered(earlier, earlier_review)
         withheld = abstention(provider, model, evidence, status, reason, result["warnings"])
         withheld["evaluation"].update(
             correction_attempted=correction_attempted, checks=checks, provider=provider, model=model,
@@ -922,13 +929,15 @@ def answer(
             report("writing")
             explanation = structured_completion(provider, model, GeneralAnswer, [
                 {"role": "system", "content": (
-                    "You are Trellis, a learning tutor. Supporting sources for this question "
-                    "could not be obtained. Provide a useful explanation from general model "
+                    "You are Trellis, a learning tutor. Sufficient supporting sources for the "
+                    "requested explanation could not be obtained. Provide a useful explanation from general model "
                     "knowledge, focused on the resolved question and active_topic. The UI will "
                     "label this as unverified general AI knowledge. State uncertainty and avoid "
                     "speculation or precise claims you cannot responsibly make. Follow "
                     "context.response_guidance and give a focused explanation rather than a terse "
-                    "definition; do not pad or repeat points. Examples may be "
+                    "definition; for a deeper follow-up, continue the selected point with its "
+                    "mechanism and a useful example or trade-off rather than repeating the prior "
+                    "answer. Do not pad or repeat points. Examples may be "
                     "clearly described as illustrative. Do not include citations, source links, "
                     "bibliographies, or claims that you searched or verified facts. Do not claim "
                     "what an unavailable document says, quote unseen material, or invent personal "
@@ -1119,6 +1128,17 @@ def answer(
                     return withhold("correction_failed", str(error.detail))
                 continue
             else:
+                if focused_deeper:
+                    if answer_words >= 180 and evaluation.completeness >= 0.85:
+                        return answered(draft, evaluation)
+                    if verified_partial is not None:
+                        earlier, earlier_review = verified_partial
+                        earlier_words = sum(len(block.text.split()) for block in earlier.blocks)
+                        if earlier_words >= 180 and earlier_review.completeness >= 0.85:
+                            return answered(earlier, earlier_review)
+                    return general_knowledge(
+                        "insufficient_depth", "The cited sources did not support a substantive continuation."
+                    )
                 if (expansion_attempted and verified_partial is not None
                         and sum(len(block.text.split()) for block in draft.blocks)
                         <= sum(len(block.text.split()) for block in verified_partial[0].blocks)):

@@ -211,6 +211,79 @@ def test_failed_detailed_expansion_keeps_the_verified_answer(monkeypatch, suppor
     assert result["evaluation"]["expansion_attempted"] is True
 
 
+@pytest.mark.parametrize("sources_only, expected_status", [
+    (False, "unverified"), (True, "abstained"),
+])
+def test_deeper_followup_does_not_present_a_shallow_partial_as_complete(
+    monkeypatch, supported_answer, sources_only, expected_status,
+):
+    monkeypatch.setattr(evidence, "retrieve_evidence", lambda *args, **kwargs: {
+        "evidence": [dict(EVIDENCE)], "warnings": [], "web_search_performed": True,
+    })
+    review = ai.AnswerEvaluation(
+        relevance=1, completeness=0.8, consistency=1, grounding=1,
+        supported=True, explanation="The sources support only a brief answer.",
+    )
+    responses = [supported_answer, review, supported_answer.model_copy(deep=True), review]
+    if not sources_only:
+        responses.append(ai.GeneralAnswer(
+            can_answer=True, content="A fuller general explanation of how functions work.", reason="",
+        ))
+    calls = []
+
+    def complete(provider, model, schema, messages):
+        calls.append(schema)
+        return responses.pop(0)
+
+    monkeypatch.setattr(ai, "structured_completion", complete)
+    result = ai.answer(None, {
+        **CONTEXT, "answer_action": "deeper", "sources_only": sources_only,
+        "focus_interaction": {
+            "prompt": "How do functions work?", "content": "A function can have parameters.",
+            "status": "answered",
+        },
+    }, "Go deeper into the selected answer")
+
+    assert result["status"] == expected_status
+    assert result["evaluation"]["status"] == (
+        "unverified" if not sources_only else "insufficient_depth"
+    )
+    assert result["content"] != "Use `def` to define a function.\n\n[1]"
+    assert calls == ([ai.DraftAnswer, ai.AnswerEvaluation] * 2
+                     + ([] if sources_only else [ai.GeneralAnswer]))
+
+
+def test_deeper_followup_withholds_shallow_partial_after_failed_revision(
+    monkeypatch, supported_answer,
+):
+    monkeypatch.setattr(evidence, "retrieve_evidence", lambda *args, **kwargs: {
+        "evidence": [dict(EVIDENCE)], "warnings": [], "web_search_performed": True,
+    })
+    unsupported = ai.DraftAnswer(status="answered", reason="", blocks=[
+        ai.AnswerBlock(text="Functions never return values.", evidence_ids=["chunk-one"]),
+    ])
+    responses = iter([
+        supported_answer,
+        ai.AnswerEvaluation(relevance=1, completeness=0.7, consistency=1, grounding=1,
+                            supported=True, explanation="Only a brief description is supported."),
+        unsupported,
+        ai.AnswerEvaluation(relevance=1, completeness=0.3, consistency=0.2, grounding=0.2,
+                            supported=False, explanation="The revision contradicts the source."),
+    ])
+    monkeypatch.setattr(ai, "structured_completion", lambda *args: next(responses))
+
+    result = ai.answer(None, {
+        **CONTEXT, "answer_action": "deeper",
+        "focus_interaction": {
+            "prompt": "How do functions work?", "content": "A function can have parameters.",
+            "status": "answered",
+        },
+    }, "Go deeper into the selected answer")
+
+    assert result["status"] == "abstained"
+    assert result["evaluation"]["status"] == "low_grounding"
+
+
 def test_detailed_question_researches_shallow_sources_before_expanding(monkeypatch):
     supplied = {**EVIDENCE, "excerpt": "Functions can have names and parameters. " * 80}
     discovered = {**EVIDENCE, "id": "web-detail", "source_id": "web-source",
