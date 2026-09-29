@@ -32,48 +32,7 @@ flowchart LR
     API --> Web[Web search and page fetching]
 ```
 
-This is the component map. The UI calls the backend through a same-origin API; PostgreSQL stores learning state and searchable vectors, while local files hold uploads and exports. The two main processing flows are:
 
-**Source and journey creation**
-
-```mermaid
-flowchart LR
-    Material["File, URL, or pasted text"] --> Pending["Save pending source"]
-    Pending --> Index["Background parse, chunk, embed"]
-    Index --> Corpus[(PostgreSQL + pgvector)]
-    Request["Goal or existing curriculum"] --> Build["Plan topics or import an outline / roadmap"]
-    Corpus -.->|Selected material, if any| Build
-    WebEvidence["Fetched web evidence for a goal"] -.->|When needed| Build
-    Build --> Review["Check hierarchy and applicable source support"]
-    Review --> Journey["Save journey, nodes, and attached sources"]
-```
-
-Source indexing runs as recoverable background work in the FastAPI process. A goal can also use fetched web evidence; an imported roadmap can use the selected source's headings directly.
-
-**Question to learning answer**
-
-```mermaid
-flowchart TB
-    Question["Question in a node or exploratory thread"] --> Scope["Load only that conversation; resolve follow-up"]
-    Scope --> Retrieve["Rank this journey's source passages"]
-    Retrieve --> Draft["Draft an answer with cited passage IDs"]
-    Retrieve -.->|At most one fresh search if needed| Web["Search web, fetch pages, index passages"]
-    Web --> Draft
-    Draft --> Check["Validate citations and evaluate claims"]
-    Check -->|Supported| Save["Save answer and evidence snapshot"]
-    Check -->|Unsupported| Correct["Correct once and recheck"]
-    Correct -->|Supported| Save
-    Correct -->|Still unsupported| Withhold["Save withheld response"]
-    Retrieve -->|No passages after web search| Policy{"Sources only or source-specific?"}
-    Draft -->|Still insufficient after web search| Policy
-    Policy -->|Yes| Withhold
-    Policy -->|No| Unverified["Save labelled general-AI answer"]
-    Save --> Stream["Stream saved result to the UI"]
-    Withhold --> Stream
-    Unverified --> Stream
-```
-
-The bounded web search can happen during retrieval or when drafting or review finds a coverage gap. Progress updates arrive during the request; answer text streams after the checked result is saved. A failed citation or grounding check cannot turn into an unverified answer. Learners can then save chosen answers, excerpts, or personal notes in that journey's notebook and export a study selection as a PDF. [Architecture details](docs/architecture.md).
 
 ## How It Works
 
